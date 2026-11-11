@@ -27,10 +27,13 @@ fun AmbientFace(
     orbState: OrbState,
     onPttClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Fills the whole screen behind the HUD (the GL orb); the default is the static preview orb. */
+    orb: @Composable () -> Unit = { DefaultAmbientOrb() },
 ) {
     val px = LocalPx.current
     val now by rememberNow()
     Box(modifier.fillMaxSize()) {
+        orb()
         StatusBar(mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart))
 
         // Clock: top-left of the content area (content starts at y=48).
@@ -45,8 +48,6 @@ fun AmbientFace(
             modifier = Modifier.offset(px.dp(54f), px.dp(184f)),
         )
 
-        // Orb: center (670, 392), diameter 520.
-        Box(Modifier.offset(px.dp(670f - 260f), px.dp(392f - 260f))) { PlaceholderOrb(520f) }
         Text(
             orbState.name,
             style = JarvisType.StatusBar.style(JarvisColors.TextMuted),
@@ -75,4 +76,11 @@ fun AmbientFace(
             }
         }
     }
+}
+
+/** Preview stand-in: orb center (670, 392), diameter 520. */
+@Composable
+private fun DefaultAmbientOrb() {
+    val px = LocalPx.current
+    Box(Modifier.offset(px.dp(670f - 260f), px.dp(392f - 260f))) { PlaceholderOrb(520f) }
 }

@@ -123,12 +123,11 @@ internal object StateTable {
 
     fun durationMs(prev: OrbState, to: OrbState): Float = when {
         to == OrbState.ERROR -> 80f
-        to == OrbState.SPEAKING -> 250f // H19: IDLE/STANDBY/ERROR/THINKING -> SPEAKING all snap-ish
-        prev == OrbState.SPEAKING && to == OrbState.LISTENING -> 150f // H11 barge-in snap
         prev == OrbState.ERROR -> 600f
         to == OrbState.CONNECTING -> 300f
         prev == OrbState.CONNECTING && to == OrbState.LISTENING -> 200f
         prev == OrbState.LISTENING && to == OrbState.THINKING -> 400f
+        prev == OrbState.THINKING && to == OrbState.SPEAKING -> 250f
         prev == OrbState.SPEAKING && to == OrbState.STANDBY -> 800f
         prev == OrbState.STANDBY && to == OrbState.IDLE -> 1500f
         else -> 400f
@@ -136,11 +135,10 @@ internal object StateTable {
 
     fun easeId(prev: OrbState, to: OrbState): Int = when {
         to == OrbState.ERROR -> LINEAR
-        to == OrbState.SPEAKING -> OUT_CUBIC
-        prev == OrbState.SPEAKING && to == OrbState.LISTENING -> OUT_QUAD
         prev == OrbState.ERROR -> OUT_QUAD
         to == OrbState.CONNECTING -> OUT_QUAD
         prev == OrbState.CONNECTING && to == OrbState.LISTENING -> LINEAR
+        prev == OrbState.THINKING && to == OrbState.SPEAKING -> OUT_CUBIC
         else -> IN_OUT
     }
 

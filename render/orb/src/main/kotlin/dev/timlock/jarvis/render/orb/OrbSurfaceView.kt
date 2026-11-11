@@ -4,8 +4,6 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.opengl.GLSurfaceView
 import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
 import android.os.PowerManager
 import android.view.Choreographer
 import android.view.Surface
@@ -32,13 +30,9 @@ class OrbSurfaceView(
         get() = renderer.qualityOverride
         set(v) { renderer.qualityOverride = v }
 
-    @Volatile private var running = false
-    // Cadence runs on its own looper (review H3): Choreographer is per-Looper, requestRender() is thread-safe.
-    private var cadenceThread: HandlerThread? = null
-    private var cadenceHandler: Handler? = null
-    private var choreo: Choreographer? = null
-    private var lastRenderNs = 0L   // cadence thread only
-    private var appliedFps = 0      // cadence thread only
+    private var running = false
+    private var lastRenderNs = 0L
+    private var appliedFps = 0
     private var thermalListener: Any? = null
     private val vsyncNs: Long
 
@@ -52,7 +46,7 @@ class OrbSurfaceView(
                 requestRender()
             }
             if (fps != appliedFps) applyFrameRate(fps)
-            choreo?.postFrameCallback(this)
+            Choreographer.getInstance().postFrameCallback(this)
         }
     }
 
@@ -80,7 +74,8 @@ class OrbSurfaceView(
 
     /** Lifecycle hook: call from Activity.onPause. */
     fun pauseOrb() {
-        stopCadence()
+        running = false
+        Choreographer.getInstance().removeFrameCallback(frameCb)
         onPause()
     }
 
@@ -93,26 +88,9 @@ class OrbSurfaceView(
     private fun startCadence() {
         if (running) return
         running = true
-        var h = cadenceHandler
-        if (h == null) {
-            val t = HandlerThread("orb-cadence").also { it.start() }
-            cadenceThread = t
-            h = Handler(t.looper)
-            cadenceHandler = h
-        }
-        h.post {
-            val c = Choreographer.getInstance() // this looper's Choreographer
-            choreo = c
-            lastRenderNs = 0L
-            appliedFps = 0
-            c.removeFrameCallback(frameCb)
-            c.postFrameCallback(frameCb)
-        }
-    }
-
-    private fun stopCadence() {
-        running = false
-        cadenceHandler?.post { choreo?.removeFrameCallback(frameCb) }
+        lastRenderNs = 0L
+        appliedFps = 0
+        Choreographer.getInstance().postFrameCallback(frameCb)
     }
 
     override fun onAttachedToWindow() {
@@ -127,10 +105,8 @@ class OrbSurfaceView(
     }
 
     override fun onDetachedFromWindow() {
-        stopCadence()
-        cadenceThread?.quitSafely()
-        cadenceThread = null
-        cadenceHandler = null
+        running = false
+        Choreographer.getInstance().removeFrameCallback(frameCb)
         if (Build.VERSION.SDK_INT >= 29) {
             (thermalListener as? PowerManager.OnThermalStatusChangedListener)?.let { power.removeThermalStatusListener(it) }
         }

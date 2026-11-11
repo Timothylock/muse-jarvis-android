@@ -16,24 +16,17 @@ internal class QualityGovernor(private val headroom: () -> Float) {
     private var windowStart = 0L
     private var overWindows = 0
     private var healthyMs = 0L
-    private var frames = 0
 
     fun record(sampleMs: Float, nowMs: Long, targetFps: Int) {
         if (windowStart == 0L) windowStart = nowMs
         if (n < buf.size) buf[n++] = sampleMs
-        frames++
         if (nowMs - windowStart < WINDOW_MS) return
         val windowLen = nowMs - windowStart
         windowStart = nowMs
         val p95 = if (n >= 8) percentile(0.95f) else 0f
         n = 0
-        // Budget = 93% of the target interval (15.5 ms @60, 31 @30, 46.5 @20). A window is only "over" if frames
-        // were actually dropped too: the GL thread can block on a free buffer inside a frame and still hold the
-        // cadence, and counting that as overload ratcheted the tier down to D and kept it there (run-4 finding).
-        val limit = 0.93f * 1000f / targetFps
-        val missed = frames < 0.9f * targetFps * windowLen / 1000f
-        frames = 0
-        val over = p95 > limit && missed
+        val limit = if (targetFps >= 45) 15.5f else 31f
+        val over = p95 > limit
         val hot = thermalStatus >= THERMAL_MODERATE
         overWindows = if (over) overWindows + 1 else 0
         if ((overWindows >= 2 || hot) && tier != Tier.D) {

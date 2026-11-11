@@ -34,9 +34,6 @@ uniform vec2 uCenter; uniform float uRadius; uniform float uHalfW; uniform float
 uniform float uLenS; uniform float uLenL; uniform float uLongEvery; uniform float uDir;
 uniform vec3 uColS; uniform vec3 uColL; uniform vec3 uColSweep; uniform float uAlphaS; uniform float uAlphaL;
 uniform float uSweepOn; uniform float uHead; uniform float uCount;
-uniform vec4 uTRev;   // x active, y reveal 0..1, z mode (0 index mask+head, 1 hash drop, 2 head only), w head amount
-uniform vec2 uSw2;    // x second sweep head (tick index, runs backwards), y amount
-uniform vec3 uHotCol;
 out float vV; out float vAng; out vec3 vCol; out float vA;
 void main(){
   float th = aT.x + uRot;
@@ -47,28 +44,9 @@ void main(){
   vec2 p = uCenter + dir * rad + tg * aT.z * uHalfW;
   gl_Position = ndc(p);
   vCol = isLong ? uColL : uColS; vA = isLong ? uAlphaL : uAlphaS;
-  float k = 99.0;
   if (uSweepOn > 0.5) {
-    k = mod(uHead - aT.w, uCount);
+    float k = mod(uHead - aT.w, uCount);
     if (k < 8.0) { float s = 1.0 - k / 8.0; vCol = mix(vCol, uColSweep, s); vA = mix(vA, min(1.0, vA * 1.7), s); }
-  }
-  if (uSw2.y > 0.01) {
-    float k2 = mod(aT.w - uSw2.x, uCount);
-    if (k2 < 8.0) { float s = (1.0 - k2 / 8.0) * uSw2.y; vCol = mix(vCol, uColSweep, s); vA = mix(vA, min(1.0, vA * 1.7), s); }
-    float f = min(1.0, clamp(1.0 - k / 4.0, 0.0, 1.0) * clamp(1.0 - k2 / 4.0, 0.0, 1.0) * uSw2.y * 3.0);
-    vCol = mix(vCol, uHotCol, f); vA = mix(vA, 1.0, f);
-  }
-  if (uTRev.x > 0.5) {
-    if (uTRev.z > 1.5 || uTRev.z < 0.5) {
-      float dh = uTRev.y * uCount - aT.w;
-      if (uTRev.z < 0.5 && dh <= 0.0) vA = 0.0;
-      float hs = clamp(1.0 - dh / (uCount * 0.0556), 0.0, 1.0) * step(0.0, dh);
-      float hd = uTRev.w * hs * hs;
-      vCol = mix(vCol, uHotCol, hd); vA = mix(vA, 1.0, hd);
-    } else {
-      float hsh = fract(sin(aT.w * 12.9898 + 4.1) * 43758.5453);
-      if (hsh >= uTRev.y) vA = 0.0;
-    }
   }
   vV = aT.z; vAng = 0.0;
 }
@@ -92,8 +70,6 @@ in float vV; in float vAng; in vec3 vCol; in float vA;
 uniform float uHalfW; uniform float uStroke; uniform float uGlow; uniform float uSigma;
 uniform float uRot; uniform float uSoft; uniform float uCap; uniform float uRadPx;
 uniform int uMode; uniform vec4 uArcs; uniform vec2 uPer;
-uniform vec4 uRev;    // x active, y reveal 0..1, z head amount, w mask on (0 = head pass only)
-uniform vec3 uRevHot;
 out vec4 oC;
 float arcM(float a, float st, float len, float per, out float cap){
   float q = mod(a - st, per);
@@ -120,15 +96,8 @@ void main(){
     float m1 = arcM(a, uArcs.z, uArcs.w, TAU, c2);
     m = max(m0, m1); cap = max(cap * step(0.001, m0), c2 * step(0.001, m1));
   }
-  float rm = 1.0; float rh = 0.0;
-  if (uRev.x > 0.5) {
-    float dh = uRev.y * TAU - vAng;
-    rm = mix(1.0, smoothstep(0.0, 0.02, dh), uRev.w);
-    float hs = clamp(1.0 - dh / 0.349, 0.0, 1.0) * step(0.0, dh);
-    rh = uRev.z * hs * hs;
-  }
-  float v = (core + g) * m * rm * (1.0 + cap) * vA * (1.0 + rh * 1.2);
-  vec3 c = mix(vCol, uRevHot, rh) * v;
+  float v = (core + g) * m * (1.0 + cap) * vA;
+  vec3 c = vCol * v;
   float h = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   c += (h - 0.5) / 255.0 * smoothstep(0.0, 0.05, g * m * vA);
   oC = vec4(c, 1.0);
@@ -170,7 +139,7 @@ void main(){
 
     const val GRID_FS = FS + TAU + """
 in vec2 vP; uniform float uR; uniform float uRot; uniform vec3 uCol; uniform float uA;
-uniform float uRadar; uniform float uRadarAng; uniform float uExp;
+uniform float uRadar; uniform float uRadarAng;
 out vec4 oC;
 void main(){
   float r = length(vP) * 1.6;
@@ -192,7 +161,6 @@ void main(){
     float edge = exp(-behind * behind * 400.0) * 1.2;
     v += uRadar * (lines * (wedge * 2.5) + (wedge * 0.22 + edge * 0.5 * (1.0 - r / 1.6)));
   }
-  v *= 1.0 - smoothstep(uExp - 0.12, uExp, r);
   oC = vec4(uCol * v * uA, 1.0);
 }
 """
@@ -219,36 +187,14 @@ out vec4 oC;
 void main(){ float a = texture(uTex, vUv).a; oC = vec4(uColor * a * uAlpha, 1.0); }
 """
 
-    /**
-     * Particles: aA = (seed, orbitR, phase, speed deg/s), aB = (size px, depth, streamer, -). All motion here.
-     * Vertices >= uBurstBase are speech-burst motes (6 slots x 16, C3): fly 0.12 R -> 0.9 R over 900 ms.
-     */
+    /** Particles: aA = (seed, orbitR, phase, speed deg/s), aB = (size px, depth, streamer, -). All motion here. */
     const val PART_VS = VS + NDC + """
 layout(location=0) in vec4 aA; layout(location=1) in vec4 aB;
 uniform vec2 uCenter; uniform float uR; uniform float uOrbit; uniform float uRadOff; uniform float uTime;
 uniform float uCount; uniform float uDepthLo; uniform float uDepthHi; uniform float uBright; uniform float uPull;
 uniform float uScale; uniform vec3 uTint; uniform vec3 uTeal; uniform vec3 uBrightCol;
-uniform float uBurstBase; uniform float uBurstBr; uniform vec3 uHotCol;
-uniform float uBurst[6]; uniform float uBurstS[6];
 out vec3 vC; out float vA;
-void hide(){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; vC = vec3(0.0); }
 void main(){
-  if (float(gl_VertexID) >= uBurstBase) {
-    int b = int((float(gl_VertexID) - uBurstBase) / 16.0);
-    float st = uBurst[b];
-    float k = (uTime - st) / 0.9;
-    if (k < 0.0 || k >= 1.0) { hide(); return; }
-    float e = 1.0 - (1.0 - k) * (1.0 - k) * (1.0 - k);
-    float r = 0.12 + 0.78 * e + (aA.x - 0.5) * 0.12 * e;
-    float sg = aA.w < 0.0 ? -1.0 : 1.0;
-    float ang = aA.z + st * 2.399 + 0.3 * k * sg;
-    vec2 p = uCenter + r * uR * vec2(sin(ang), -cos(ang));
-    gl_Position = ndc(p);
-    gl_PointSize = aB.x * uScale * 0.7 + 1.5;
-    vC = mix(uHotCol, uTeal, k);
-    vA = (1.0 - k) * uBurstS[b] * uBurstBr;
-    return;
-  }
   float depth = aB.y;
   float vis = step(uDepthLo, depth) * (1.0 - step(uDepthHi, depth));
   float cf = clamp((uCount - float(gl_VertexID)) / 6.0, 0.0, 1.0);
@@ -260,7 +206,7 @@ void main(){
   float ang = aA.z + aA.w * uOrbit * 0.0174533;
   vec2 p = uCenter + r * uR * vec2(sin(ang), -cos(ang));
   float a = uBright * (0.35 + 0.65 * depth) * (1.0 + aB.z) * ef * cf * vis;
-  if (a < 0.002) { hide(); return; }
+  if (a < 0.002) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; vC = vec3(0.0); return; }
   gl_Position = ndc(p);
   gl_PointSize = aB.x * uScale * (0.75 + 0.5 * depth) + 1.5;
   vC = mix(mix(uTeal, uBrightCol, depth), uTint, 0.5);
@@ -273,38 +219,6 @@ void main(){
   float d = length(gl_PointCoord - 0.5) * 2.0;
   float s = exp(-d * d * 3.0) * (1.0 - smoothstep(0.75, 1.0, d));
   oC = vec4(vC * s * vA, 1.0);
-}
-"""
-
-    /** Leader line: one quad along (uP0, uDir) for uLc px (+uPad), vS = px along, vD = px across. Analytic, no blur. */
-    const val LEAD_VS = VS + NDC + QUAD + """
-uniform vec2 uP0; uniform vec2 uDir; uniform float uLc; uniform float uPad;
-out float vS; out float vD;
-void main(){
-  vec2 q = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
-  float s = mix(-uPad, uLc + uPad, q.x); float d = mix(-uPad, uPad, q.y);
-  vS = s; vD = d;
-  gl_Position = ndc(uP0 + uDir * s + vec2(-uDir.y, uDir.x) * d);
-}
-"""
-    const val LEAD_FS = FS + """
-in float vS; in float vD;
-uniform float uLc; uniform float uHalf; uniform float uGlowSig; uniform float uAlpha;
-uniform vec3 uCol; uniform vec3 uHot;
-uniform float uHeadAmt; uniform float uHeadSig; uniform float uPulseS; uniform float uPulseAmt; uniform float uPulseSig;
-out vec4 oC;
-void main(){
-  float d = abs(vD);
-  float core = 1.0 - smoothstep(uHalf - 0.5, uHalf + 0.5, d);
-  float o = max(d - uHalf, 0.0);
-  float g = 0.3 * exp(-(o*o) / (2.0*uGlowSig*uGlowSig));
-  float m = smoothstep(-0.5, 0.5, vS) * (1.0 - smoothstep(uLc - 0.5, uLc + 0.5, vS));
-  vec3 c = uCol * (core + g) * m * uAlpha;
-  float hr = (vS - uLc) * (vS - uLc) + vD * vD;
-  c += uHot * uHeadAmt * exp(-hr / (2.0 * uHeadSig * uHeadSig));
-  float pr = (vS - uPulseS) * (vS - uPulseS) + vD * vD;
-  c += uHot * uPulseAmt * exp(-pr / (2.0 * uPulseSig * uPulseSig));
-  oC = vec4(c, 1.0);
 }
 """
 }

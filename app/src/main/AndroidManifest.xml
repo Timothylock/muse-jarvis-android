@@ -2,7 +2,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
-        android:name=".JarvisApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
@@ -21,15 +20,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- §7.7 ADB control surface; DUMP is held by the adb shell only. -->
-        <receiver
-            android:name=".SimCommandReceiver"
-            android:exported="true"
-            android:permission="android.permission.DUMP">
-            <intent-filter>
-                <action android:name="dev.timlock.jarvis.SIM" />
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

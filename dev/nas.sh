@@ -18,7 +18,7 @@ PKG=dev.timlock.jarvis
 mkdir -p dev/out
 
 sync() {
-  tar --exclude=.git --exclude='*/build' --exclude=.gradle --exclude=dev/out --exclude=local.properties -czf - . \
+  tar --exclude=.git --exclude='*/build' --exclude=.gradle --exclude=dev/out --exclude=.claude --exclude=local.properties -czf - . \
     | "${SSH[@]}" "mkdir -p $REMOTE && find $REMOTE -type d \( -name build -o -name .gradle \) -prune -o -type d -name src -prune -exec rm -rf {} + 2>/dev/null; tar -xzf - -C $REMOTE && echo 'sdk.dir=/opt/android-sdk' > $REMOTE/local.properties"
 }
 

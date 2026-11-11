@@ -31,3 +31,6 @@ secrets*
 
 # Proof screenshots live outside the repo
 proof*.png
+
+# Agent worktrees
+.claude/worktrees/
