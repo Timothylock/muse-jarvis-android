@@ -9,6 +9,12 @@ import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbState
 import dev.timlock.jarvis.core.store.AppState
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
+import android.util.Base64
+import dev.timlock.jarvis.transport.sim.SimTransport
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -20,12 +26,47 @@ class SimCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val cmd = intent.getStringExtra("cmd") ?: ""
         val value = intent.getStringExtra("value")
+        if (cmd == "display") {
+            handleDisplay(intent)
+            return
+        }
         val result = try {
             run(cmd, value)
         } catch (t: Throwable) {
             fail(cmd, "internal: ${t.javaClass.simpleName}")
         }
         Log.i("JARVIS_SIM", result.toString())
+    }
+
+    /** §7.7 `cmd display`: inject a display command through the sim transport and log the validator result. */
+    private fun handleDisplay(intent: Intent) {
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.Default).launch {
+            val result = try {
+                displayResult(intent)
+            } catch (t: Throwable) {
+                fail("display", "internal: ${t.javaClass.simpleName}")
+            }
+            Log.i("JARVIS_SIM", result.toString())
+            pending.finish()
+        }
+    }
+
+    private suspend fun displayResult(intent: Intent): JSONObject {
+        if (AppGraph.store.state.value.mode != Mode.SIM) return fail("display", "not in sim mode")
+        val sim = AppGraph.transport as? SimTransport ?: return fail("display", "no sim transport")
+        val name = intent.getStringExtra("name")?.trim().orEmpty()
+        if (name.isEmpty()) return fail("display", "missing name")
+        val b64 = intent.getStringExtra("json_b64")
+        val json = if (b64 != null) {
+            try { String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8) } catch (e: IllegalArgumentException) {
+                return fail("display", "bad json_b64")
+            }
+        } else intent.getStringExtra("json") ?: "{}"
+        val r = sim.injectCommand(name, json) ?: return fail("display", "timeout waiting for reply")
+        if (!r.ok) return fail("display", r.error ?: "error")
+        val payload = try { JSONObject(r.payloadJson ?: "{}") } catch (e: Exception) { JSONObject() }
+        return JSONObject().put("cmd", "display").put("name", name).put("ok", true).put("payload", payload)
     }
 
     private fun run(cmd: String, value: String?): JSONObject {
@@ -76,4 +117,10 @@ class SimCommandReceiver : BroadcastReceiver() {
             is dev.timlock.jarvis.core.store.PttState.Latched -> "latched"
         })
         .put("panelCount", s.panelCount)
+        .put("panels", JSONArray().also { arr ->
+            for (p in s.panels.panels) arr.put(
+                JSONObject().put("id", p.id).put("type", p.type.name.lowercase())
+                    .put("sticky", p.sticky).put("collapsed", p.collapsed),
+            )
+        })
 }
