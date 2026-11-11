@@ -79,6 +79,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         store.dispatch(Intent.ChooseMode(mode))
         val t = TransportFactory.create(mode)
         transport = t
+        AppGraph.transport = t
         jobs = listOf(
             viewModelScope.launch { t.link.collect { store.dispatch(Intent.LinkChanged(it)) } },
             viewModelScope.launch { t.events.collect { store.dispatch(Event(it)) } },
@@ -95,6 +96,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun stopTransport() {
         jobs.forEach { it.cancel() }
         jobs = emptyList()
+        AppGraph.transport = null
         transport?.stop()
         transport = null
     }
