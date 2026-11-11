@@ -5,7 +5,6 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.timlock.jarvis.core.model.Mode
-import dev.timlock.jarvis.core.store.AppStore
 import dev.timlock.jarvis.core.store.Event
 import dev.timlock.jarvis.core.store.Intent
 import dev.timlock.jarvis.core.transport.GadgetTransport
@@ -15,7 +14,9 @@ import kotlinx.coroutines.launch
 
 /** Owns the store, the persisted mode and the active transport. Commands run strictly in order. */
 class MainViewModel(app: Application) : AndroidViewModel(app) {
-    val store = AppStore(logger = { Log.w("JARVIS_STORE", it) })
+    val store get() = AppGraph.store
+    val orbHolder get() = AppGraph.orbHolder
+    val audioBus get() = AppGraph.audioBus
     private val modeStore = ModeStore(app)
 
     private sealed interface Cmd {
@@ -79,7 +80,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val t = TransportFactory.create(mode)
         transport = t
         jobs = listOf(
-            viewModelScope.launch { t.link.collect { store.dispatch(Intent.TransportLink(it)) } },
+            viewModelScope.launch { t.link.collect { store.dispatch(Intent.LinkChanged(it)) } },
             viewModelScope.launch { t.events.collect { store.dispatch(Event(it)) } },
             viewModelScope.launch { t.start() },
         )
