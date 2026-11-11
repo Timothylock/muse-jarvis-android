@@ -4,5 +4,6 @@ dependencies {
     api project(':core:model')
     api project(':core:transport-api')
     api "org.jetbrains.kotlinx:kotlinx-coroutines-core:${rootProject.ext.coroutines}"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:${rootProject.ext.serializationJson}"
     testImplementation "junit:junit:${rootProject.ext.junit}"
 }

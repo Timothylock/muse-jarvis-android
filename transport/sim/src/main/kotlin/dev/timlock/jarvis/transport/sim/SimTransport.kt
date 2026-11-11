@@ -16,7 +16,6 @@ import dev.timlock.jarvis.core.transport.PcmSink
 import dev.timlock.jarvis.core.transport.PcmSource
 import dev.timlock.jarvis.core.transport.SdkToken
 import dev.timlock.jarvis.core.transport.TransportEvent
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,10 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "JARVIS_SIM"
 
@@ -81,25 +77,9 @@ class SimTransport : GadgetTransport {
         return FallbackTurn(replyText = "Simulated reply.")
     }
 
-    private val pendingCommands = ConcurrentHashMap<String, CompletableDeferred<CommandResult>>()
-    private val commandSeq = AtomicInteger(0)
-
-    /** ADB display injection (§7.7): emits a Command event and awaits the store's reply (1.5 s timeout -> null). */
-    suspend fun injectCommand(name: String, paramsJson: String): CommandResult? {
-        val id = "sim-${commandSeq.incrementAndGet()}"
-        val deferred = CompletableDeferred<CommandResult>()
-        pendingCommands[id] = deferred
-        try {
-            _events.emit(TransportEvent.Command(id, name, paramsJson, TransportKind.SIM))
-            return withTimeoutOrNull(1500) { deferred.await() }
-        } finally {
-            pendingCommands.remove(id)
-        }
-    }
-
     override fun replyCommand(invocationId: String, result: CommandResult) {
-        Log.i(TAG, "{\"cmd\":\"reply\",\"id\":\"$invocationId\",\"ok\":${result.ok}}")
-        pendingCommands[invocationId]?.complete(result)
+        // TODO(M4): record into SimCommandBus.
+        Log.i(TAG, "replyCommand id=$invocationId ok=${result.ok}")
     }
 }
 

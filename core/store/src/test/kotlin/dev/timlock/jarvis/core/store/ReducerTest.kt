@@ -57,6 +57,9 @@ private class H(var s: AppState = AppState()) {
     }
 }
 
+private fun cmd(name: String, params: String, id: String = "inv", kind: TransportKind = TransportKind.SIM) =
+    Event(TransportEvent.Command(id, name, params, kind))
+
 class ReducerTest {
     // ---- boot / link / mode ---------------------------------------------------------------
 
@@ -410,9 +413,9 @@ class ReducerTest {
     @Test fun layoutDocksImmediatelyAndReturnsAfterDelay() {
         val h = H.sim()
         assertEquals(OrbLayout.CENTERED, h.s.layout)
-        h.send(Intent.PanelCount(2))
+        h.send(cmd("display.card", "{\"title\":\"A\",\"id\":\"a\"}"))
         assertEquals(OrbLayout.DOCKED, h.s.layout)
-        h.after(5000, Intent.PanelCount(0))
+        h.after(5000, Intent.DismissPanel("a"))
         assertEquals(OrbLayout.DOCKED, h.s.layout)
         h.after(LAYOUT_RETURN_MS - 1)
         assertEquals(OrbLayout.DOCKED, h.s.layout)
@@ -423,8 +426,8 @@ class ReducerTest {
     }
 
     @Test fun panelReturningCancelsLayoutReturn() {
-        val h = H.sim().send(Intent.PanelCount(1)).after(100, Intent.PanelCount(0))
-        h.after(500, Intent.PanelCount(1))
+        val h = H.sim().send(cmd("display.card", "{\"title\":\"A\",\"id\":\"a\"}")).after(100, Intent.DismissPanel("a"))
+        h.after(500, cmd("display.card", "{\"title\":\"B\",\"id\":\"b\",\"sticky\":true}"))
         h.after(5000)
         assertEquals(OrbLayout.DOCKED, h.s.layout)
         assertNull(h.s.layoutReturnAt)

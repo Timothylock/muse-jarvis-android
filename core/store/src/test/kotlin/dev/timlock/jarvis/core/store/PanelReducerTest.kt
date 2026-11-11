@@ -1,0 +1,211 @@
+package dev.timlock.jarvis.core.store
+
+import dev.timlock.jarvis.core.model.CallPhase
+import dev.timlock.jarvis.core.model.CommandResult
+import dev.timlock.jarvis.core.model.LinkState
+import dev.timlock.jarvis.core.model.Mode
+import dev.timlock.jarvis.core.model.OrbLayout
+import dev.timlock.jarvis.core.model.PanelContent
+import dev.timlock.jarvis.core.model.TransportKind
+import dev.timlock.jarvis.core.transport.TransportEvent
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+private class PH(var s: AppState = AppState()) {
+    var t = 1000L
+    var fx: List<Effect> = emptyList()
+    val kind get() = if (s.mode == Mode.REAL) TransportKind.REAL else TransportKind.SIM
+    fun send(i: Input, at: Long = t): PH {
+        t = at
+        val r = reduce(s, i, at)
+        s = r.state; fx = r.effects
+        return this
+    }
+    fun after(ms: Long, i: Input = Intent.Tick) = send(i, t + ms)
+    fun cmd(name: String, params: String, inv: String = "inv") = send(Event(TransportEvent.Command(inv, name, params, kind)))
+    fun card(id: String, extra: String = "") = cmd("display.card", """{"title":"T","id":"$id"$extra}""")
+    val reply get() = fx.filterIsInstance<Effect.ReplyCommand>().single()
+    val ids get() = s.panels.panels.map { it.id }
+
+    companion object {
+        val online = LinkState.Online("n", "vm")
+        fun sim() = PH().send(Intent.ChooseMode(Mode.SIM)).send(Intent.BootComplete).send(Intent.LinkChanged(online))
+        fun real() = PH().send(Intent.ChooseMode(Mode.REAL)).send(Intent.BootComplete).send(Intent.LinkChanged(online))
+    }
+}
+
+class PanelReducerTest {
+    @Test fun commandRepliesPulsesAndAttention() {
+        val h = PH.sim().card("a")
+        assertEquals("inv", h.reply.invocationId)
+        assertEquals(CommandResult.ok("""{"id":"a","shown":true,"truncated":false}"""), h.reply.result)
+        assertEquals(h.t, h.s.pulseAtMs)
+        assertEquals(h.t, h.s.attentionAtMs)
+        assertEquals(1, h.s.panelCount)
+        assertEquals(OrbLayout.DOCKED, h.s.layout)
+        assertTrue(h.s.panels.panels[0].sim)
+    }
+
+    @Test fun noAttentionPulseDuringCall() {
+        val h = PH.sim().send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
+        h.card("a")
+        assertEquals(h.t, h.s.pulseAtMs)
+        assertEquals(0L, h.s.attentionAtMs)
+        assertNull(h.s.panels.panels[0].expiresAtMs)
+    }
+
+    @Test fun rejectRepliesError() {
+        val h = PH.sim().cmd("display.card", "{}")
+        assertEquals(CommandResult.error("title: required"), h.reply.result)
+        assertEquals(0, h.s.panelCount)
+        assertEquals(0L, h.s.pulseAtMs)
+    }
+
+    @Test fun generatedIdsAreDeterministic() {
+        val a = PH.sim().cmd("display.card", """{"title":"x"}""")
+        val b = PH.sim().cmd("display.card", """{"title":"x"}""")
+        assertEquals(a.ids, b.ids)
+        assertTrue(Regex("card-[0-9a-f]{4}").matches(a.ids[0]))
+        a.cmd("display.card", """{"title":"x"}""")
+        assertEquals(2, a.ids.distinct().size)
+    }
+
+    @Test fun rateLimitEleventhRejected() {
+        val h = PH.sim()
+        repeat(10) { h.after(100).card("p$it") ; assertTrue(h.reply.result.ok) }
+        h.after(100).card("p11")
+        assertEquals(CommandResult.error("rate limited"), h.reply.result)
+        h.after(100).cmd("display.clear", "{}")
+        assertEquals("rate limited", h.reply.result.error)
+        // window slides: the first hit was at t0+100, so at +5100 there is room again
+        h.send(Intent.Tick, 1000 + 5100 + 100)
+        h.card("q")
+        assertTrue(h.reply.result.ok)
+    }
+
+    @Test fun clearByIdAndAll() {
+        val h = PH.sim().card("a").card("b").card("c")
+        h.cmd("display.clear", """{"id":"b"}""")
+        assertEquals("""{"id":"b","cleared":1}""", h.reply.result.payloadJson)
+        assertEquals(listOf("c", "a"), h.ids)
+        h.cmd("display.clear", """{"id":"zz"}""")
+        assertEquals("""{"id":"zz","cleared":0}""", h.reply.result.payloadJson)
+        h.cmd("display.clear", "{}")
+        assertEquals("""{"id":null,"cleared":2}""", h.reply.result.payloadJson)
+        assertEquals(0, h.s.panelCount)
+    }
+
+    @Test fun expiryTickRemovesPanelAndLayoutReturnsAfterDelay() {
+        val h = PH.sim().card("a")
+        val due = h.s.nextDeadline()!!
+        assertEquals(h.t + 120_000, due)
+        h.send(Intent.Tick, due)
+        assertEquals(0, h.s.panelCount)
+        assertEquals(OrbLayout.DOCKED, h.s.layout)
+        h.after(LAYOUT_RETURN_MS - 1)
+        assertEquals(OrbLayout.DOCKED, h.s.layout)
+        h.after(1)
+        assertEquals(OrbLayout.CENTERED, h.s.layout)
+    }
+
+    @Test fun callEndStartsExpiryClock() {
+        val h = PH.sim().send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
+        h.card("a")
+        assertNull(h.s.panels.panels[0].expiresAtMs)
+        h.after(10_000, Intent.HangUp)
+        assertEquals(h.t + 120_000, h.s.panels.panels[0].expiresAtMs)
+        h.after(120_000)
+        assertEquals(0, h.s.panelCount)
+    }
+
+    @Test fun panelIntents() {
+        val h = PH.sim().card("a").card("b")
+        h.send(Intent.PinPanel("a", true))
+        assertTrue(h.s.panels.panels.first { it.id == "a" }.pinned)
+        h.send(Intent.DismissPanel("b"))
+        assertEquals(listOf("a"), h.ids)
+        h.cmd("display.timer", """{"label":"x","seconds":5,"id":"tm"}""")
+        h.send(Intent.AcknowledgeTimer("tm"))
+        assertEquals(listOf("a"), h.ids)
+        h.send(Intent.PanelCount(7))
+        assertEquals(1, h.s.panelCount)
+    }
+
+    @Test fun expandIntent() {
+        val items = (1..10).joinToString(",") { "\"i$it\"" }
+        val h = PH.sim().cmd("display.list", """{"title":"x","id":"a","items":[$items]}""")
+            .cmd("display.list", """{"title":"x","id":"b","items":[$items]}""")
+        assertTrue(h.s.panels.panels[1].collapsed)
+        h.send(Intent.ExpandPanel("a"))
+        assertFalse(h.s.panels.panels[1].collapsed)
+        assertTrue(h.s.panels.panels[0].collapsed)
+    }
+
+    @Test fun modeChangeWipesPanels() {
+        val h = PH.sim().card("a")
+        h.send(Intent.ChooseMode(Mode.REAL))
+        assertEquals(0, h.s.panelCount)
+        h.send(Intent.ChooseMode(Mode.SIM).let { it }).card("b")
+        h.send(Intent.ResetMode)
+        assertEquals(0, h.s.panelCount)
+    }
+
+    @Test fun timerChimesOnceAndExpiresAfterRingWindow() {
+        val h = PH.sim().cmd("display.timer", """{"label":"Tea","seconds":10,"id":"tm"}""")
+        val ends = h.t + 10_000
+        assertEquals(ends, h.s.nextDeadline())
+        h.send(Intent.Tick, ends)
+        assertEquals(listOf(Effect.Earcon(EarconKind.TIMER_CHIME)), h.fx)
+        assertTrue((h.s.panels.panels[0].content as PanelContent.Timer).chimed)
+        assertEquals(ends + 60_000, h.s.nextDeadline())
+        h.after(1000)
+        assertTrue(h.fx.none { it is Effect.Earcon })
+        h.send(Intent.Tick, ends + 60_000)
+        assertEquals(0, h.s.panelCount)
+        assertTrue(h.fx.none { it is Effect.Earcon })
+    }
+
+    @Test fun timerSurvivesCallEnd() {
+        val h = PH.sim().send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
+        h.cmd("display.timer", """{"label":"Tea","seconds":600,"id":"tm"}""")
+        val exp = h.s.panels.panels[0].expiresAtMs
+        h.after(5000, Intent.HangUp)
+        assertEquals(exp, h.s.panels.panels[0].expiresAtMs)
+    }
+
+    @Test fun persistOnlyInRealModeForStickyAndTimers() {
+        val sim = PH.sim().card("a", ""","sticky":true""")
+        assertTrue(sim.fx.none { it is Effect.PersistPanels })
+        val h = PH.real().card("plain")
+        assertTrue(h.fx.none { it is Effect.PersistPanels })
+        h.card("keep", ""","sticky":true""")
+        val p = h.fx.filterIsInstance<Effect.PersistPanels>().single()
+        assertEquals(listOf("keep"), p.stack.panels.map { it.id })
+        h.cmd("display.timer", """{"label":"x","seconds":9,"id":"tm"}""")
+        assertEquals(setOf("keep", "tm"), h.fx.filterIsInstance<Effect.PersistPanels>().single().stack.panels.map { it.id }.toSet())
+        h.send(Intent.DismissPanel("keep"))
+        assertEquals(listOf("tm"), h.fx.filterIsInstance<Effect.PersistPanels>().single().stack.panels.map { it.id })
+        h.send(Intent.DismissPanel("plain"))
+        assertTrue(h.fx.none { it is Effect.PersistPanels })
+    }
+
+    @Test fun restorePanelsRealOnly() {
+        val src = PH.real().card("keep", ""","sticky":true""")
+        val saved = src.s.panels
+        val real = PH.real().send(Intent.RestorePanels(saved))
+        assertEquals(listOf("keep"), real.ids)
+        assertEquals(OrbLayout.DOCKED, real.s.layout)
+        val sim = PH.sim().send(Intent.RestorePanels(saved))
+        assertEquals(0, sim.s.panelCount)
+    }
+
+    @Test fun mismatchedKindCommandDropped() {
+        val h = PH.sim()
+        h.send(Event(TransportEvent.Command("i", "display.card", """{"title":"x"}""", TransportKind.REAL)))
+        assertEquals(0, h.s.panelCount)
+        assertTrue(h.fx.isEmpty())
+    }
+}
