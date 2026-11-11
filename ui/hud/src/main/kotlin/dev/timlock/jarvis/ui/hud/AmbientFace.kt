@@ -14,7 +14,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextAlign
 import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbState
@@ -29,6 +28,10 @@ fun AmbientFace(
     modifier: Modifier = Modifier,
     /** Fills the whole screen behind the HUD (the GL orb); the default is the static preview orb. */
     orb: @Composable () -> Unit = { DefaultAmbientOrb() },
+    /** True when panels are visible: the docked orb would overlap the big clock, so it is hidden. */
+    hasPanels: Boolean = false,
+    /** Drawn over the face (above the status bar and clock), e.g. the panel stack. */
+    overlay: @Composable () -> Unit = {},
 ) {
     val px = LocalPx.current
     val now by rememberNow()
@@ -36,24 +39,19 @@ fun AmbientFace(
         orb()
         StatusBar(mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart))
 
-        // Clock: top-left of the content area (content starts at y=48).
-        Text(
-            now.timeText(),
-            style = JarvisType.AmbientClock.style(JarvisColors.TextPrimary),
-            modifier = Modifier.offset(px.dp(50f), px.dp(60f)),
-        )
-        Text(
-            now.dateText(),
-            style = JarvisType.HudLabel.copy(tracking = 0f).style(JarvisColors.TextSecondary),
-            modifier = Modifier.offset(px.dp(54f), px.dp(184f)),
-        )
-
-        Text(
-            orbState.name,
-            style = JarvisType.StatusBar.style(JarvisColors.TextMuted),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth().offset(y = px.dp(668f)),
-        )
+        if (!hasPanels) {
+            // Clock: top-left of the content area (content starts at y=48).
+            Text(
+                now.timeText(),
+                style = JarvisType.AmbientClock.style(JarvisColors.TextPrimary),
+                modifier = Modifier.offset(px.dp(50f), px.dp(60f)),
+            )
+            Text(
+                now.dateText(),
+                style = JarvisType.HudLabel.copy(tracking = 0f).style(JarvisColors.TextSecondary),
+                modifier = Modifier.offset(px.dp(54f), px.dp(184f)),
+            )
+        }
 
         // Bottom 64 px PTT bar (y 736-800).
         val unpaired = orbState == OrbState.UNPAIRED
@@ -69,12 +67,24 @@ fun AmbientFace(
                     .clickable(onClick = onPttClick),
                 contentAlignment = Alignment.Center,
             ) {
+                val label = when (orbState) {
+                    OrbState.IDLE -> "HOLD TO TALK"
+                    OrbState.UNPAIRED -> "Pair to begin"
+                    else -> orbState.name
+                }
                 Text(
-                    if (unpaired) "Pair to begin" else "HOLD TO TALK",
-                    style = JarvisType.HudLabel.style(if (unpaired) JarvisColors.WarnAmber else JarvisColors.CyanBright),
+                    label,
+                    style = JarvisType.HudLabel.style(
+                        when (orbState) {
+                            OrbState.UNPAIRED -> JarvisColors.WarnAmber
+                            OrbState.IDLE -> JarvisColors.CyanBright
+                            else -> JarvisColors.CyanMid
+                        },
+                    ),
                 )
             }
         }
+        overlay()
     }
 }
 
