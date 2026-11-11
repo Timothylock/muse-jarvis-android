@@ -37,17 +37,7 @@ data class OrbSnapshot(
     val shakeAtMs: Long = 0L,
     /** Night mode (§2.7): ×0.35 brightness, tier D, 20 fps. */
     val night: Boolean = false,
-    /** Up to 3 leader lines, top panel first. Empty unless layout == DOCKED. */
-    val leaders: List<LeaderAnchor> = emptyList(),
 )
-
-/**
- * GL leader line to one DOCK panel (review H4/C9/C15). [yPx] = design-px y (1340x800 canvas) of the panel's
- * left-edge midpoint at x = 625; the renderer eases y changes itself (panels slide 350 ms). Timeline per
- * [revealStartMs]: shoot from L1 toward x 625 at +250 ms over 180 ms (ease-out-expo, 6 px cyan.hot head dot),
- * then settle to 25% alpha over 2 s. [pulseAtMs] (in-place update): a 10 px dot travels orb->panel in 350 ms.
- */
-data class LeaderAnchor(val yPx: Float, val revealStartMs: Long, val pulseAtMs: Long = 0L)
 
 /** Written by the store (main thread), read once per frame by the GL thread. */
 class OrbStateHolder {
@@ -58,21 +48,19 @@ class OrbStateHolder {
 /**
  * Lock-free audio level channel (DESIGN §3.3 step 6). One writer (an audio thread),
  * one reader (GL thread). Double-buffered with a sequence number.
- * Layout of a frame: [0] = env (0..1), [1] = onset count (as float), [2..9] = 8 bands (0..1),
- * [10] = strength of the latest onset (0..1; review H13: echoes only on stressed onsets, alpha 0.25 + 0.5·strength).
+ * Layout of a frame: [0] = env (0..1), [1] = onset count (as float), [2..9] = 8 bands (0..1).
  */
 class AudioLevels {
     private val buffers = arrayOf(FloatArray(FRAME_SIZE), FloatArray(FRAME_SIZE))
     private val seq = AtomicInteger(0)
 
     /** Writer side. [bands] must have 8 entries. Allocation-free. */
-    fun publish(env: Float, onsetCount: Int, bands: FloatArray, onsetStrength: Float = 1f) {
+    fun publish(env: Float, onsetCount: Int, bands: FloatArray) {
         val next = seq.get() + 1
         val buf = buffers[next and 1]
         buf[0] = env
         buf[1] = onsetCount.toFloat()
         for (i in 0 until BANDS) buf[2 + i] = bands[i]
-        buf[2 + BANDS] = onsetStrength
         seq.set(next)
     }
 
@@ -85,7 +73,7 @@ class AudioLevels {
 
     companion object {
         const val BANDS = 8
-        const val FRAME_SIZE = 3 + BANDS
+        const val FRAME_SIZE = 2 + BANDS
     }
 }
 

@@ -11,7 +11,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SSH=(ssh -F /home/hatch/.ssh/config timothy@tim-nas)
-REMOTE=/volume2/docker/android-build/jarvis
+# JARVIS_REMOTE_SUFFIX lets parallel worktrees build in separate NAS dirs (e.g. "-wt2").
+REMOTE=/volume2/docker/android-build/jarvis${JARVIS_REMOTE_SUFFIX:-}
 TOOLS=/volume2/docker/adb-tools
 PKG=dev.timlock.jarvis
 mkdir -p dev/out
