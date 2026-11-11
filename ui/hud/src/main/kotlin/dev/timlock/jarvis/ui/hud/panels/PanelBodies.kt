@@ -1,8 +1,5 @@
 package dev.timlock.jarvis.ui.hud.panels
 
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -65,53 +62,6 @@ internal fun PanelBody(
     }
 }
 
-/** Compact body for a 260x96 chip (H1): stats -> up to 3 metrics, card -> first line, list -> counts, timer -> countdown. */
-@Composable
-internal fun ChipBody(content: PanelContent, onAcknowledgeTimer: () -> Unit) {
-    val px = LocalPx.current
-    when (content) {
-        is PanelContent.Stats -> Row(Modifier.fillMaxSize().padding(horizontal = px.dp(12f))) {
-            for (m in content.metrics.take(3)) Box(Modifier.weight(1f)) { ChipMetric(m) }
-        }
-        is PanelContent.Card -> {
-            val first = content.body?.lineSequence()?.firstOrNull { it.isNotBlank() }
-                ?: content.bullets.firstOrNull()?.let { "▸ $it" } ?: ""
-            Text(
-                first,
-                style = JarvisType.Body.copy(sizePx = 20f).style(JarvisColors.TextPrimary).copy(lineHeight = px.sp(26f)),
-                maxLines = 2, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.fillMaxSize().padding(horizontal = px.dp(12f)),
-            )
-        }
-        is PanelContent.ListBody -> Box(Modifier.fillMaxSize().padding(horizontal = px.dp(12f)), contentAlignment = Alignment.CenterStart) {
-            val done = content.items.count { it.done }
-            Text(
-                "${content.items.size} items · $done done",
-                style = JarvisType.Body.copy(sizePx = 22f).style(JarvisColors.CyanBright),
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        is PanelContent.Timer -> TimerBody(content, onAcknowledgeTimer, compact = true)
-    }
-}
-
-@Composable
-private fun ChipMetric(m: Metric) {
-    val px = LocalPx.current
-    val valueStyle = JarvisType.MetricCompact.style(JarvisColors.CyanBright).copy(lineHeight = px.sp(44f))
-    Column {
-        Text(
-            m.value + if (m.unitAttached) (m.unit ?: "") else "",
-            style = valueStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-        )
-        Text(
-            m.label.uppercase(),
-            style = JarvisType.StatusBar.copy(sizePx = 14f).style(JarvisColors.TextSecondary).copy(lineHeight = px.sp(16f)),
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-    }
-}
-
 @Composable
 private fun CardBody(card: PanelContent.Card, onMore: () -> Unit) {
     val px = LocalPx.current
@@ -134,16 +84,7 @@ private fun StatsBody(stats: PanelContent.Stats) {
     val px = LocalPx.current
     val metrics = stats.metrics.take(6)
     val compact = metrics.size > 3
-    // Plex Mono advance is 0.6 em. Shrink one size for the whole panel so the widest value+unit fits its column.
-    val cellPx = (665f - 48f) / 3f - 12f
-    fun widthAt(sz: Float, m: Metric) = 0.6f * sz * m.value.length + (m.unit?.let { 0.6f * 26f * it.length + 6f } ?: 0f)
-    val base = if (compact) JarvisType.MetricCompact.sizePx else JarvisType.MetricStat.sizePx
-    val sizePx = metrics.fold(base) { acc, m ->
-        if (widthAt(acc, m) <= cellPx) acc
-        else if (!compact && widthAt(JarvisType.MetricCompact.sizePx, m) <= cellPx) JarvisType.MetricCompact.sizePx
-        else minOf(acc, JarvisType.MetricCompact.sizePx, ((cellPx - (widthAt(0f, m))) / (0.6f * m.value.length)).coerceAtLeast(24f))
-    }
-    val role = (if (compact) JarvisType.MetricCompact else JarvisType.MetricStat).copy(sizePx = sizePx)
+    val role = if (compact) JarvisType.MetricCompact else JarvisType.MetricStat
     val rows = metrics.chunked(3)
     Column(
         Modifier.fillMaxSize().padding(start = px.dp(24f), end = px.dp(24f), bottom = px.dp(8f)),
@@ -151,14 +92,13 @@ private fun StatsBody(stats: PanelContent.Stats) {
     ) {
         Column {
             for (row in rows) {
-                // Fixed row pitch so two compact rows always fit the 210 px cap (§2.5): 44 value + 20 label.
-                Row(Modifier.fillMaxWidth().height(px.dp(if (compact) 64f else 90f))) {
+                Row(Modifier.fillMaxWidth()) {
                     for (m in row) Box(Modifier.weight(1f)) { MetricCell(m, role) }
                     repeat(3 - row.size) { Box(Modifier.weight(1f)) }
                 }
             }
         }
-        stats.caption?.takeIf { rows.size == 1 }?.let {
+        stats.caption?.let {
             Text(
                 it,
                 style = JarvisType.Caption.copy(sizePx = if (rows.size > 1) 20f else 24f).style(JarvisColors.TextSecondary),
@@ -172,31 +112,24 @@ private fun StatsBody(stats: PanelContent.Stats) {
 @Composable
 private fun MetricCell(m: Metric, role: dev.timlock.jarvis.ui.hud.TypeRole) {
     val px = LocalPx.current
-    val valueStyle = role.style(JarvisColors.CyanBright)
+    val valueStyle = role.style(JarvisColors.CyanBright).copy(lineHeight = px.sp(role.sizePx))
     val unitStyle = JarvisType.MetricUnit.style(JarvisColors.TextSecondary)
-    // Fixed slots (value = font size, label = 20 px); glyphs may overhang their slot but never push the label down.
     Column {
-        Box(Modifier.fillMaxWidth().height(px.dp(if (role.sizePx > 44f) 64f else 44f)), contentAlignment = Alignment.CenterStart) {
-            Text(
-                buildAnnotatedString {
-                    append(m.value)
-                    m.unit?.let { u ->
-                        if (!m.unitAttached) append(THIN_SPACE)
-                        withStyle(SpanStyle(fontFamily = unitStyle.fontFamily, fontSize = unitStyle.fontSize, color = unitStyle.color)) { append(u) }
-                    }
-                },
-                style = valueStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-                modifier = Modifier.wrapContentHeight(unbounded = true),
-            )
-        }
-        Box(Modifier.fillMaxWidth().height(px.dp(20f)), contentAlignment = Alignment.CenterStart) {
-            Text(
-                m.label.uppercase(),
-                style = JarvisType.StatusBar.style(JarvisColors.TextSecondary),
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.wrapContentHeight(unbounded = true),
-            )
-        }
+        Text(
+            buildAnnotatedString {
+                append(m.value)
+                m.unit?.let { u ->
+                    if (!m.unitAttached) append(THIN_SPACE)
+                    withStyle(SpanStyle(fontFamily = unitStyle.fontFamily, fontSize = unitStyle.fontSize, color = unitStyle.color)) { append(u) }
+                }
+            },
+            style = valueStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+        )
+        Text(
+            m.label.uppercase(),
+            style = JarvisType.StatusBar.style(JarvisColors.TextSecondary).copy(lineHeight = px.sp(20f)),
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -261,7 +194,7 @@ private fun ListRow(index: Int, item: ListItem, ordered: Boolean, highlighted: B
 }
 
 @Composable
-private fun TimerBody(timer: PanelContent.Timer, onAck: () -> Unit, compact: Boolean = false) {
+private fun TimerBody(timer: PanelContent.Timer, onAck: () -> Unit) {
     val px = LocalPx.current
     val now = remember { mutableLongStateOf(monoMillis()) }
     var blinkOn by remember { mutableStateOf(true) }
@@ -283,22 +216,18 @@ private fun TimerBody(timer: PanelContent.Timer, onAck: () -> Unit, compact: Boo
     val ringing = rem <= 0
     val secs = if (ringing) 0L else ceil(rem / 1000.0).toLong()
     Row(
-        Modifier.fillMaxSize().padding(horizontal = px.dp(if (compact) 12f else 24f)).then(if (ringing) Modifier.clickable(onClick = onAck) else Modifier),
+        Modifier.fillMaxSize().padding(horizontal = px.dp(24f)).then(if (ringing) Modifier.clickable(onClick = onAck) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             formatCountdown(secs),
-            style = (if (compact) JarvisType.MetricCompact else JarvisType.TimerCountdown)
-                .style(if (ringing && !blinkOn) androidx.compose.ui.graphics.Color.Transparent else JarvisColors.CyanBright)
-                .copy(lineHeight = px.sp(if (compact) 44f else 88f)),
+            style = JarvisType.TimerCountdown.style(if (ringing && !blinkOn) androidx.compose.ui.graphics.Color.Transparent else JarvisColors.CyanBright)
+                .copy(lineHeight = px.sp(88f)),
             maxLines = 1, softWrap = false,
         )
         if (ringing) {
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                Text(
-                    if (compact) "TAP" else "TAP TO DISMISS",
-                    style = (if (compact) JarvisType.StatusBar else JarvisType.HudLabel).style(JarvisColors.WarnAmber),
-                )
+                Text("TAP TO DISMISS", style = JarvisType.HudLabel.style(JarvisColors.WarnAmber))
             }
         }
     }
