@@ -1,0 +1,6 @@
+plugins { id 'org.jetbrains.kotlin.jvm' }
+kotlin { jvmToolchain(17) }
+dependencies {
+    api project(':core:model')
+    api "org.jetbrains.kotlinx:kotlinx-coroutines-core:${rootProject.ext.coroutines}"
+}

@@ -1,0 +1,33 @@
+# Build outputs
+build/
+.gradle/
+.kotlin/
+*.apk
+*.aab
+*.ap_
+*.dex
+captures/
+dev/out/
+.externalNativeBuild/
+.cxx/
+
+# Local machine / IDE
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Secrets and signing material — NEVER commit
+*.keystore
+*.jks
+*.p12
+*.pem
+pairing*.json
+identity*.json
+sdk_token*
+*.env
+.env*
+secrets*
+
+# Proof screenshots live outside the repo
+proof*.png
