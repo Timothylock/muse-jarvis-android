@@ -27,6 +27,7 @@ dependencies {
     implementation project(':core:store')
     implementation project(':transport:sim')
     implementation project(':ui:hud')
+    implementation project(':render:orb')
     implementation platform("androidx.compose:compose-bom:${rootProject.ext.composeBom}")
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.foundation:foundation'
