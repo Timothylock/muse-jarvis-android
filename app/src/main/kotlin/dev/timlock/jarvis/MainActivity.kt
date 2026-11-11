@@ -20,6 +20,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbState
+import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
 import dev.timlock.jarvis.ui.hud.AmbientFace
 import dev.timlock.jarvis.ui.hud.FirstRunScreen
@@ -73,7 +74,7 @@ private fun MuseDeskApp(vm: MainViewModel) {
 
     LaunchedEffect(interstitialUntil) {
         if (interstitialUntil != null) {
-            delay((interstitialUntil - System.currentTimeMillis()).coerceAtLeast(0))
+            delay((interstitialUntil - monoMillis()).coerceAtLeast(0))
             vm.store.dispatch(StoreIntent.ClearInterstitial)
         }
     }
