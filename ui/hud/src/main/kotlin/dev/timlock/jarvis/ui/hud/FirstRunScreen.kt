@@ -4,8 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,19 +26,14 @@ fun FirstRunScreen(
     onSimulate: () -> Unit,
     onImport: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Fills the whole screen behind the content (the GL orb, center (670,226) d=300). */
-    orb: @Composable () -> Unit = { DefaultFirstRunOrb() },
 ) {
     val px = LocalPx.current
-    Box(modifier.fillMaxSize()) {
-    orb()
     Column(
-        Modifier.fillMaxSize(),
+        modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Top,
+        verticalArrangement = Arrangement.Center,
     ) {
-        // Space reserved for the orb (y 76..376).
-        Spacer(Modifier.height(px.dp(76f + 300f)))
+        PlaceholderOrb(300f)
         Spacer(Modifier.height(px.dp(20f)))
         Text(
             "Connect this display to Muse",
@@ -70,14 +63,6 @@ fun FirstRunScreen(
             modifier = Modifier.clickable(onClick = onImport).padding(px.dp(8f)),
         )
     }
-    }
-}
-
-/** Preview stand-in: orb center (670, 226), diameter 300. */
-@Composable
-private fun DefaultFirstRunOrb() {
-    val px = LocalPx.current
-    Box(Modifier.offset(px.dp(670f - 150f), px.dp(226f - 150f))) { PlaceholderOrb(300f) }
 }
 
 @Composable

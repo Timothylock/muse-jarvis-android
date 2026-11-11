@@ -10,22 +10,21 @@
 #   dev/nas.sh start [extras]   am start MainActivity with optional extra args (e.g. --es jarvis.mode sim)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SSH=(ssh -F /home/hatch/.ssh/config -o ServerAliveInterval=15 -o ServerAliveCountMax=8 timothy@tim-nas)
-# JARVIS_REMOTE_SUFFIX lets parallel worktrees build in separate NAS dirs (e.g. "-wt2").
-REMOTE=/volume2/docker/android-build/jarvis${JARVIS_REMOTE_SUFFIX:-}
+SSH=(ssh -F /home/hatch/.ssh/config timothy@tim-nas)
+REMOTE=/volume2/docker/android-build/jarvis
 TOOLS=/volume2/docker/adb-tools
 PKG=dev.timlock.jarvis
 mkdir -p dev/out
 
 sync() {
-  tar --exclude=.git --exclude='*/build' --exclude=.gradle --exclude=dev/out --exclude=.claude --exclude=local.properties -czf - . \
+  tar --exclude=.git --exclude='*/build' --exclude=.gradle --exclude=dev/out --exclude=local.properties -czf - . \
     | "${SSH[@]}" "mkdir -p $REMOTE && find $REMOTE -type d \( -name build -o -name .gradle \) -prune -o -type d -name src -prune -exec rm -rf {} + 2>/dev/null; tar -xzf - -C $REMOTE && echo 'sdk.dir=/opt/android-sdk' > $REMOTE/local.properties"
 }
 
 gradle_run() {
   sync
   set +e
-  "${SSH[@]}" "docker run --rm -v $REMOTE:/work -v android-gradle-cache:/root/.gradle -v /volume2/docker/android-build/android-home:/root/.android android-build:35-py311 gradle --console=plain $*" > dev/out/build.log 2>&1
+  "${SSH[@]}" "docker run --rm -v $REMOTE:/work -v android-gradle-cache:/root/.gradle -v /volume2/docker/android-build/android-home:/root/.android android-build:35 gradle --console=plain $*" > dev/out/build.log 2>&1
   rc=$?
   set -e
   grep -E '^e: |error:|FAILED|BUILD SUCCESSFUL|BUILD FAILED|What went wrong' -A3 dev/out/build.log | head -80

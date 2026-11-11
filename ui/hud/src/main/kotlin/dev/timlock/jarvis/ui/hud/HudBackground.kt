@@ -10,22 +10,14 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import kotlin.math.hypot
 
-/**
- * bg.void with a radial vignette: bg.deep at the center -> bg.void at 0.7 * diagonal.
- * Pass [drawBackground] = false when the GL orb surface (which draws the same vignette) sits behind the HUD.
- */
+/** bg.void with a radial vignette: bg.deep at the center -> bg.void at 0.7 * diagonal. */
 @Composable
-fun HudBackground(
-    modifier: Modifier = Modifier,
-    drawBackground: Boolean = true,
-    content: @Composable () -> Unit,
-) {
+fun HudBackground(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Box(
         modifier
             .fillMaxSize()
-            .then(if (drawBackground) Modifier.background(JarvisColors.BgVoid) else Modifier)
+            .background(JarvisColors.BgVoid)
             .drawBehind {
-                if (!drawBackground) return@drawBehind
                 val diag = hypot(size.width, size.height)
                 drawRect(
                     Brush.radialGradient(

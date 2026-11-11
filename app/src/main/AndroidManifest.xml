@@ -1,27 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Package visibility for TextToSpeech (make_wav test hook, §7.7). -->
-    <queries>
-        <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
-    </queries>
-
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- §4.1 step 4 / §6.6: BLE pairing (requested contextually on the Bluetooth step only). -->
-    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-
     <application
-        android:name=".JarvisApp"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
@@ -40,16 +20,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- §6.8: persistent Muse link (specialUse) + microphone while a call is active. Runs only in real mode. -->
-        <service
-            android:name=".JarvisService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse|microphone">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Keeps the always-on connection to the Muse gadget service so the desk display stays online and can receive display commands while the screen is idle." />
-        </service>
-
     </application>
 </manifest>

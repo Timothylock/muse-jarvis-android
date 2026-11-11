@@ -26,13 +26,7 @@ dependencies {
     implementation project(':core:transport-api')
     implementation project(':core:store')
     implementation project(':transport:sim')
-    implementation project(':transport:sdk')
     implementation project(':ui:hud')
-    implementation project(':render:orb')
-    implementation project(':audio')
-    implementation project(':core:secure')
-    implementation project(':feature:pairing')
-    implementation project(':transport:sdk')
     implementation platform("androidx.compose:compose-bom:${rootProject.ext.composeBom}")
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.foundation:foundation'

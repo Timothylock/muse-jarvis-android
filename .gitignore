@@ -31,10 +31,3 @@ secrets*
 
 # Proof screenshots live outside the repo
 proof*.png
-
-# Agent worktrees
-.claude/worktrees/
-
-# Python bytecode (local test runs)
-__pycache__/
-*.pyc
