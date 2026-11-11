@@ -37,7 +37,17 @@ data class OrbSnapshot(
     val shakeAtMs: Long = 0L,
     /** Night mode (§2.7): ×0.35 brightness, tier D, 20 fps. */
     val night: Boolean = false,
+    /** Up to 3 leader lines, top panel first. Empty unless layout == DOCKED. */
+    val leaders: List<LeaderAnchor> = emptyList(),
 )
+
+/**
+ * GL leader line to one DOCK panel (review H4/C9/C15). [yPx] = design-px y (1340x800 canvas) of the panel's
+ * left-edge midpoint at x = 625; the renderer eases y changes itself (panels slide 350 ms). Timeline per
+ * [revealStartMs]: shoot from L1 toward x 625 at +250 ms over 180 ms (ease-out-expo, 6 px cyan.hot head dot),
+ * then settle to 25% alpha over 2 s. [pulseAtMs] (in-place update): a 10 px dot travels orb->panel in 350 ms.
+ */
+data class LeaderAnchor(val yPx: Float, val revealStartMs: Long, val pulseAtMs: Long = 0L)
 
 /** Written by the store (main thread), read once per frame by the GL thread. */
 class OrbStateHolder {
