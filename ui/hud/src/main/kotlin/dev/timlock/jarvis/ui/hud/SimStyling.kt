@@ -12,6 +12,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
@@ -68,5 +71,24 @@ fun SimInterstitial(modifier: Modifier = Modifier) {
             style = JarvisType.HudLabel.copy(sizePx = 44f).style(SimStyling.accent),
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+/** §7.6 rule 4: violet 4 px left edge for panels rendered in sim mode. */
+fun Modifier.simLeftEdge(px: Px, widthPx: Float = 4f): Modifier = drawBehind {
+    drawRect(SimStyling.accent, Offset.Zero, Size(px.device(widthPx), size.height))
+}
+
+/** §7.6 rule 4: "SIM" micro-badge for panel title rows. */
+@Composable
+fun SimBadge(modifier: Modifier = Modifier) {
+    val px = LocalPx.current
+    Box(
+        modifier
+            .border(px.dp(1f), SimStyling.accent, RoundedCornerShape(px.dp(4f)))
+            .padding(horizontal = px.dp(6f), vertical = px.dp(1f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("SIM", style = JarvisType.StatusBar.style(SimStyling.accent))
     }
 }
