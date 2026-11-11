@@ -58,7 +58,8 @@ data class AppState(
     val layoutSinceMs: Long = 0L,
     /** Visible panels (§2.5); owned by the panel manager. [panelCount] mirrors panels.size. */
     val panels: PanelStack = PanelStack(),
-    val panelCount: Int = 0,
+    /** Deterministic counter for auto-generated panel ids. */
+    val idSeq: Int = 0,
     /** Arrival times of recent display commands for the 10-per-5 s rate limit (§5.3). */
     val displayHits: List<Long> = emptyList(),
     val pulseAtMs: Long = 0L,
@@ -68,12 +69,17 @@ data class AppState(
     val countdownEndMs: Long = 0L,
     val night: Boolean = false,
 ) {
+    /** Derived: number of panels in [panels]. */
+    val panelCount: Int get() = panels.panels.size
+
     val latched: Boolean get() = ptt == PttState.Latched
 
     /** Earliest pending deadline, for scheduling a Tick. */
-    fun nextDeadline(): Long? = listOfNotNull(
-        thinkDeadline, standbyDeadline, errorDeadline, pttCapAt, pttWarnAt, settleDeadline, layoutReturnAt,
-    ).minOrNull()
+    fun nextDeadline(): Long? = (
+        listOfNotNull(thinkDeadline, standbyDeadline, errorDeadline, pttCapAt, pttWarnAt, settleDeadline, layoutReturnAt) +
+            panels.panels.mapNotNull { it.expiresAtMs } +
+            panels.panels.mapNotNull { (it.content as? dev.timlock.jarvis.core.model.PanelContent.Timer)?.takeIf { t -> !t.chimed }?.endsAtMs }
+        ).minOrNull()
 }
 
 sealed interface Input
@@ -113,7 +119,7 @@ sealed interface Intent : Input {
     /** Restore persisted sticky panels/timers at boot (real mode only, §5.5). */
     data class RestorePanels(val stack: PanelStack) : Intent
 
-    /** Legacy/manual override of the panel count (tests); the panel manager normally derives it. */
+    /** Deprecated no-op: the panel count is derived from [AppState.panels]. */
     data class PanelCount(val count: Int) : Intent
     data object DisplayPulse : Intent
     data object AttentionPulse : Intent

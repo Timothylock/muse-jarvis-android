@@ -16,6 +16,10 @@ import dev.timlock.jarvis.core.model.OrbState.SPEAKING
 import dev.timlock.jarvis.core.model.OrbState.STANDBY
 import dev.timlock.jarvis.core.model.OrbState.THINKING
 import dev.timlock.jarvis.core.model.OrbState.UNPAIRED
+import dev.timlock.jarvis.core.model.CommandResult
+import dev.timlock.jarvis.core.model.PanelContent
+import dev.timlock.jarvis.core.model.PanelStack
+import dev.timlock.jarvis.core.model.PanelType
 import dev.timlock.jarvis.core.model.TransportKind
 import dev.timlock.jarvis.core.transport.TransportEvent
 
@@ -30,6 +34,8 @@ const val TAP_MS = 250L
 const val SETTLE_MS = 200L
 const val LAYOUT_RETURN_MS = 1_200L
 const val MIC_TAIL_MS = 2_000L
+const val DISPLAY_RATE_WINDOW_MS = 5_000L
+const val DISPLAY_RATE_MAX = 10
 
 const val REASON_SESSION_DEAD = "session_dead"
 const val CAPTION_OFFLINE = "Offline — reconnecting"
@@ -56,9 +62,20 @@ fun reduce(state: AppState, input: Input, now: Long, log: (String) -> Unit = {})
     val c = Ctx(state, now)
     c.expire()
     c.handle(input)
+    c.lifetimes(state.call != CallStatus.None)
     c.finish()
+    if (state.mode == Mode.REAL && c.s.mode == Mode.REAL) {
+        val before = persistable(state.panels)
+        val after = persistable(c.s.panels)
+        if (before != after) c.fx += Effect.PersistPanels(PanelStack(after))
+    }
     return Reduction(c.s, c.fx)
 }
+
+/** Sticky/pinned panels and timers, minus transient layout/expiry bookkeeping (§5.5). */
+private fun persistable(st: PanelStack): List<dev.timlock.jarvis.core.model.Panel> =
+    st.panels.filter { PanelManager.isSticky(it) || it.type == PanelType.TIMER }
+        .map { it.copy(collapsed = false, expiresAtMs = null, newRows = emptySet()) }
 
 private fun TransportKind.toMode(): Mode = if (this == TransportKind.SIM) Mode.SIM else Mode.REAL
 
@@ -136,6 +153,7 @@ private class Ctx(var s: AppState, val now: Long) {
     // ---- deadlines ----------------------------------------------------------------------
 
     fun expire() {
+        expirePanels()
         s.pttWarnAt?.takeIf { it <= now }?.let {
             s = s.copy(pttWarnAt = null)
             if (s.ptt != PttState.Up) emit(Effect.Haptic(HapticKind.TICK))
@@ -169,6 +187,26 @@ private class Ctx(var s: AppState, val now: Long) {
         }
     }
 
+    /** Panel deadlines: timer zero chime (once) and panel expiry. */
+    fun expirePanels() {
+        var chimes = 0
+        val marked = s.panels.panels.map { p ->
+            val c = p.content
+            if (c is PanelContent.Timer && !c.chimed && c.endsAtMs <= now) { chimes++; p.copy(content = c.copy(chimed = true)) } else p
+        }
+        if (chimes > 0) {
+            s = s.copy(panels = s.panels.copy(panels = marked))
+            repeat(chimes) { emit(Effect.Earcon(EarconKind.TIMER_CHIME)) }
+        }
+        val (kept, _) = PanelManager.expire(s.panels, now)
+        if (kept !== s.panels) s = s.copy(panels = kept)
+    }
+
+    /** Recompute expiries when the call opens or closes (§5.5: the call is the context). */
+    fun lifetimes(wasOpen: Boolean) {
+        if (wasOpen != callOpen) s = s.copy(panels = PanelManager.applyLifetimes(s.panels, callOpen, now))
+    }
+
     fun exitError() {
         goStable()
         if (callOpen) {
@@ -182,6 +220,7 @@ private class Ctx(var s: AppState, val now: Long) {
     fun handle(input: Input) {
         when (input) {
             is Intent.ChooseMode -> {
+                if (input.mode != s.mode) s = s.copy(panels = PanelStack()) // sim panels never persist into real (§7.2)
                 s = s.copy(
                     mode = input.mode, link = LinkState.Connecting,
                     simInterstitialUntil = if (input.mode == Mode.SIM) now + SIM_INTERSTITIAL_MS else null,
@@ -189,6 +228,7 @@ private class Ctx(var s: AppState, val now: Long) {
                 restart()
             }
             Intent.ResetMode -> {
+                s = s.copy(panels = PanelStack())
                 s = s.copy(mode = null, link = LinkState.Unpaired, simInterstitialUntil = null)
                 restart()
             }
@@ -214,9 +254,12 @@ private class Ctx(var s: AppState, val now: Long) {
             is Intent.PairingClosed -> if (m == PAIRING) {
                 if (input.paired) go(if (stableOrb(s) == IDLE) IDLE else OFFLINE) else go(UNPAIRED)
             }
-            is Intent.PanelCount -> s = s.copy(panelCount = input.count.coerceAtLeast(0))
-            is Intent.DismissPanel, is Intent.PinPanel, is Intent.ExpandPanel,
-            is Intent.AcknowledgeTimer, is Intent.RestorePanels -> Unit // TODO(M3): panel manager
+            is Intent.PanelCount -> Unit // deprecated: panelCount is derived from the panel stack
+            is Intent.DismissPanel -> s = s.copy(panels = PanelManager.dismiss(s.panels, input.id))
+            is Intent.AcknowledgeTimer -> s = s.copy(panels = PanelManager.dismiss(s.panels, input.id))
+            is Intent.PinPanel -> s = s.copy(panels = PanelManager.pin(s.panels, input.id, input.pinned, now, callOpen))
+            is Intent.ExpandPanel -> s = s.copy(panels = PanelManager.expand(s.panels, input.id))
+            is Intent.RestorePanels -> restorePanels(input.stack)
             Intent.DisplayPulse -> s = s.copy(pulseAtMs = now)
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
             is Intent.SetNight -> s = s.copy(night = input.night)
@@ -347,8 +390,58 @@ private class Ctx(var s: AppState, val now: Long) {
             }
             is TransportEvent.Transcript -> emit(Effect.ShowCaption(e.text, e.role, e.final))
             is TransportEvent.AdvisoryError -> s = s.copy(advisoryErrors = e.count)
-            is TransportEvent.Command -> Unit // TODO(M3/M4): panel manager
+            is TransportEvent.Command -> command(e)
             is TransportEvent.Diagnostic -> Unit
+        }
+    }
+
+    // ---- panels (§5, §2.5) ----------------------------------------------------------------
+
+    fun restorePanels(saved: PanelStack) {
+        if (s.mode != Mode.REAL) return
+        val keep = saved.panels.filter { PanelManager.isSticky(it) || it.type == PanelType.TIMER }.map {
+            val c = it.content
+            val content = if (c is PanelContent.Timer && c.endsAtMs <= now) c.copy(chimed = true) else it.content
+            it.copy(content = content, sim = false, collapsed = false)
+        }.take(PanelManager.MAX_PANELS)
+        val restored = PanelManager.layout(PanelManager.applyLifetimes(PanelStack(keep), callOpen, now))
+        s = s.copy(panels = PanelManager.expire(restored, now).first)
+    }
+
+    fun command(e: TransportEvent.Command) {
+        val hits = s.displayHits.filter { now - it < DISPLAY_RATE_WINDOW_MS }
+        if (hits.size >= DISPLAY_RATE_MAX) {
+            s = s.copy(displayHits = hits)
+            emit(Effect.ReplyCommand(e.invocationId, CommandResult.error("rate limited")))
+            return
+        }
+        s = s.copy(displayHits = hits + now)
+        var seq = s.idSeq
+        val taken = s.panels.panels.map { it.id }.toSet()
+        val v = DisplayValidator.validate(e.name, e.paramsJson, now) { type ->
+            var id: String
+            do {
+                seq++
+                id = type.name.lowercase() + "-" + "%04x".format((seq * 40503) and 0xFFFF)
+            } while (id in taken)
+            id
+        }
+        s = s.copy(idSeq = seq)
+        when (v) {
+            is Validation.Reject -> emit(Effect.ReplyCommand(e.invocationId, CommandResult.error(v.error)))
+            is Validation.Clear -> {
+                val before = s.panels.panels.size
+                val next = if (v.id == null) PanelManager.clearAll(s.panels) else PanelManager.dismiss(s.panels, v.id)
+                s = s.copy(panels = next)
+                val n = before - next.panels.size
+                emit(Effect.ReplyCommand(e.invocationId, CommandResult.ok(DisplayValidator.clearPayload(v.id, n))))
+            }
+            is Validation.Show -> {
+                val panel = v.panel.copy(sim = s.mode == Mode.SIM)
+                s = s.copy(panels = PanelManager.upsert(s.panels, panel, now, callOpen), pulseAtMs = now)
+                if (!callOpen) s = s.copy(attentionAtMs = now) // ambient push (§2.6)
+                emit(Effect.ReplyCommand(e.invocationId, CommandResult.ok(DisplayValidator.showPayload(panel.id, v.truncated, v.ignored))))
+            }
         }
     }
 

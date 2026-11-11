@@ -154,7 +154,7 @@ class PanelManagerTest {
         assertEquals(120, PanelHeights.estimatePx(card("a")))
         assertEquals(56 + 2 * 34 + 24, PanelHeights.estimatePx(card("a", body = "x".repeat(45))))
         assertEquals(56 + 6 * 34 + 24, PanelHeights.estimatePx(card("a", body = "x".repeat(1000))))
-        assertEquals(160, PanelHeights.estimatePx(stats("s", 3)))
+        assertEquals(150, PanelHeights.estimatePx(stats("s", 3)))
         assertEquals(210, PanelHeights.estimatePx(stats("s", 4)))
         assertEquals(150, PanelHeights.estimatePx(timer("t", 5)))
         assertEquals(120, PanelHeights.estimatePx(list("l", "a")))
@@ -201,35 +201,5 @@ class PanelManagerTest {
         var s = PanelStack().up(big("a"), 1).up(big("b"), 2).up(big("c"), 3)
         assertFalse(s.panels[0].collapsed)
         assertTrue(PanelManager.total(s.panels) <= 656)
-    }
-
-    @Test fun collapseIgnoresChips() {
-        val big = { id: String -> list(id, *Array(30) { "i$it" }) } // 420 each
-        val chip = big("chip").copy(placement = dev.timlock.jarvis.core.model.PanelPlacement.CHIP)
-        var s = PanelStack().up(big("a"), 1)
-        s = PanelManager.layout(s.copy(panels = listOf(chip) + s.panels))
-        assertFalse(s.panels.any { it.collapsed })
-        assertEquals(420, PanelManager.total(s.panels)) // chip not counted
-        s = s.up(big("b"), 3)
-        assertEquals(listOf("b", "chip", "a"), ids(s))
-        assertFalse(s.panels.first { it.id == "chip" }.collapsed)
-        assertTrue(s.panels.first { it.id == "a" }.collapsed)
-    }
-
-    @Test fun reconcilePromotesChipsWhenAnyPanelDocks() {
-        val chip = PanelStack().up(timer("t", 1_000_000), 1)
-        assertEquals(dev.timlock.jarvis.core.model.PanelPlacement.CHIP, chip.panels[0].placement)
-        // Call opens, Muse pushes a card: the card docks, so the idle chip must join the dock (no overlap).
-        val withCard = PanelManager.reconcilePlacement(chip.up(card("c"), 2, call = true), callOpen = true, now = 2)
-        assertTrue(withCard.panels.all { it.placement == dev.timlock.jarvis.core.model.PanelPlacement.DOCK })
-    }
-
-    @Test fun reconcileDemotesWhenOnlyPersistingPanelsRemainIdle() {
-        var s = PanelStack().up(card("c"), 1, call = true).up(card("k", sticky = true), 2, call = true)
-        s = PanelManager.dismiss(s, "c")
-        val idle = PanelManager.reconcilePlacement(s, callOpen = false, now = 3)
-        assertEquals(dev.timlock.jarvis.core.model.PanelPlacement.CHIP, idle.panels.single().placement)
-        // Still docked while the call is open.
-        assertEquals(dev.timlock.jarvis.core.model.PanelPlacement.DOCK, PanelManager.reconcilePlacement(s, callOpen = true, now = 3).panels.single().placement)
     }
 }

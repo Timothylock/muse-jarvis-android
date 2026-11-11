@@ -46,6 +46,8 @@ sealed interface PanelContent {
         val totalSeconds: Int,
         /** Countdown reaches zero at this monotonic time. */
         val endsAtMs: Long,
+        /** Store bookkeeping: the zero-chime has already been requested. */
+        val chimed: Boolean = false,
     ) : PanelContent
 }
 

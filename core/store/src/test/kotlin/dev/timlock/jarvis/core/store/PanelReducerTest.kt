@@ -6,8 +6,6 @@ import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbLayout
 import dev.timlock.jarvis.core.model.PanelContent
-import dev.timlock.jarvis.core.model.PanelPlacement
-import dev.timlock.jarvis.core.model.LeaderAnchor
 import dev.timlock.jarvis.core.model.TransportKind
 import dev.timlock.jarvis.core.transport.TransportEvent
 import org.junit.Assert.assertEquals
@@ -44,7 +42,7 @@ class PanelReducerTest {
         val h = PH.sim().card("a")
         assertEquals("inv", h.reply.invocationId)
         assertEquals(CommandResult.ok("""{"id":"a","shown":true,"truncated":false}"""), h.reply.result)
-        assertEquals(h.t + 380, h.s.pulseAtMs) // C9: first docked panel pulses when brackets pop
+        assertEquals(h.t, h.s.pulseAtMs)
         assertEquals(h.t, h.s.attentionAtMs)
         assertEquals(1, h.s.panelCount)
         assertEquals(OrbLayout.DOCKED, h.s.layout)
@@ -54,7 +52,7 @@ class PanelReducerTest {
     @Test fun noAttentionPulseDuringCall() {
         val h = PH.sim().send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
         h.card("a")
-        assertEquals(h.t + 380, h.s.pulseAtMs) // layout was CENTERED: full timeline, pulse at bracket pop
+        assertEquals(h.t, h.s.pulseAtMs)
         assertEquals(0L, h.s.attentionAtMs)
         assertNull(h.s.panels.panels[0].expiresAtMs)
     }
@@ -199,8 +197,7 @@ class PanelReducerTest {
         val saved = src.s.panels
         val real = PH.real().send(Intent.RestorePanels(saved))
         assertEquals(listOf("keep"), real.ids)
-        assertEquals(PanelPlacement.CHIP, real.s.panels.panels[0].placement)
-        assertEquals(OrbLayout.CENTERED, real.s.layout) // H1: restored sticky panels are chips
+        assertEquals(OrbLayout.DOCKED, real.s.layout)
         val sim = PH.sim().send(Intent.RestorePanels(saved))
         assertEquals(0, sim.s.panelCount)
     }
@@ -210,138 +207,5 @@ class PanelReducerTest {
         h.send(Event(TransportEvent.Command("i", "display.card", """{"title":"x"}""", TransportKind.REAL)))
         assertEquals(0, h.s.panelCount)
         assertTrue(h.fx.isEmpty())
-    }
-
-    // ---- H1 placement ----------------------------------------------------------------------
-
-    private fun inCall() = PH.sim().send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
-    private fun PH.place(id: String) = s.panels.panels.first { it.id == id }.placement
-    private val STICKY = ""","sticky":true"""
-
-    @Test fun stickyAmbientPushStaysCenteredAsChip() { // the H1 blocker scenario
-        val h = PH.sim().card("w", STICKY)
-        assertEquals(PanelPlacement.CHIP, h.place("w"))
-        assertEquals(OrbLayout.CENTERED, h.s.layout)
-        assertEquals(0, h.s.dockCount)
-        assertEquals(h.t, h.s.pulseAtMs) // chip arrival pulses now
-        assertEquals(h.t, h.s.attentionAtMs)
-        assertEquals(h.t - 380, h.s.panels.panels[0].revealStartMs)
-        assertTrue(toOrbSnapshot(h.s).leaders.isEmpty())
-    }
-
-    @Test fun timerAmbientIsChipAndNonStickyAmbientDocks() {
-        val h = PH.sim().cmd("display.timer", """{"label":"x","seconds":60,"id":"tm"}""")
-        assertEquals(PanelPlacement.CHIP, h.place("tm"))
-        assertEquals(OrbLayout.CENTERED, h.s.layout)
-        h.card("c")
-        assertEquals(PanelPlacement.DOCK, h.place("c"))
-        assertEquals(OrbLayout.DOCKED, h.s.layout)
-    }
-
-    @Test fun duringCallEverythingDocks() {
-        val h = inCall().card("a", STICKY).cmd("display.timer", """{"label":"x","seconds":60,"id":"tm"}""")
-        assertEquals(PanelPlacement.DOCK, h.place("a"))
-        assertEquals(PanelPlacement.DOCK, h.place("tm"))
-        assertEquals(OrbLayout.DOCKED, h.s.layout)
-    }
-
-    @Test fun chipUpdatedDuringCallPromotesToDock() {
-        val h = PH.sim().card("w", STICKY)
-        h.send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
-        assertEquals(PanelPlacement.CHIP, h.place("w")) // opening a call alone does not promote
-        assertEquals(OrbLayout.CENTERED, h.s.layout)
-        h.after(50).card("w", STICKY)
-        assertEquals(PanelPlacement.DOCK, h.place("w"))
-        assertEquals(OrbLayout.DOCKED, h.s.layout)
-        assertEquals(h.t, h.s.panels.panels[0].revealStartMs) // layout was not docked -> full timeline
-        assertEquals(h.t + 380, h.s.pulseAtMs)
-    }
-
-    @Test fun pinPlacementFollowsH1() {
-        val inCallPin = inCall().card("a")
-        inCallPin.send(Intent.PinPanel("a", true))
-        assertEquals(PanelPlacement.DOCK, inCallPin.place("a")) // call open: stays docked
-        val h = PH.sim().card("a")
-        h.send(Intent.PinPanel("a", true))
-        assertEquals(PanelPlacement.CHIP, h.place("a")) // no call, only persisting panels: chip (H1)
-        val c = PH.sim().card("w", STICKY)
-        c.send(Intent.PinPanel("w", true))
-        assertEquals(PanelPlacement.CHIP, c.place("w"))
-    }
-
-    @Test fun callEndDemotesPersistentPanelsToChips() {
-        val h = inCall().card("s", STICKY).card("n").cmd("display.timer", """{"label":"x","seconds":600,"id":"tm"}""")
-        h.send(Intent.PinPanel("n", true)) // pinned during the call: still DOCK
-        h.after(5000, Intent.HangUp)
-        assertEquals(PanelPlacement.CHIP, h.place("s"))
-        assertEquals(PanelPlacement.CHIP, h.place("n"))
-        assertEquals(PanelPlacement.CHIP, h.place("tm"))
-        assertEquals(h.t - 380, h.s.panels.panels.first { it.id == "s" }.revealStartMs)
-        assertEquals(OrbLayout.DOCKED, h.s.layout)
-    }
-
-    @Test fun lastDockLeavingStartsReturnTimerEvenWithChipsPresent() {
-        val h = inCall().card("s", STICKY).card("n")
-        h.after(1000, Intent.HangUp)
-        // Chips and a dock never coexist: while non-sticky "n" is docked, sticky "s" stays in the dock too.
-        assertEquals(PanelPlacement.DOCK, h.place("s"))
-        assertEquals(PanelPlacement.DOCK, h.place("n"))
-        h.send(Intent.DismissPanel("n"))
-        assertEquals(PanelPlacement.CHIP, h.place("s"))
-        assertEquals(OrbLayout.DOCKED, h.s.layout)
-        h.after(LAYOUT_RETURN_MS - 1)
-        assertEquals(OrbLayout.DOCKED, h.s.layout)
-        h.after(1)
-        assertEquals(OrbLayout.CENTERED, h.s.layout)
-        assertEquals(listOf("s"), h.ids)
-    }
-
-    @Test fun callEndWithOnlyStickyReturnsToCentered() {
-        val h = inCall().card("s", STICKY)
-        h.after(1000, Intent.HangUp)
-        assertEquals(PanelPlacement.CHIP, h.place("s"))
-        h.after(LAYOUT_RETURN_MS)
-        assertEquals(OrbLayout.CENTERED, h.s.layout)
-    }
-
-    @Test fun revealStartFirstVsSubsequentDock() {
-        val h = PH.sim().card("a")
-        assertEquals(h.t, h.s.panels.panels[0].revealStartMs)
-        assertEquals(h.t + 380, h.s.pulseAtMs)
-        h.after(2000).card("b")
-        val b = h.s.panels.panels.first { it.id == "b" }
-        assertEquals(h.t - 380, b.revealStartMs)
-        assertEquals(h.t, h.s.pulseAtMs) // revealStart + 380
-        h.after(100).card("b") // in-place update: no new timeline, pulse now
-        assertEquals(h.t - 480, h.s.panels.panels.first { it.id == "b" }.revealStartMs)
-        assertEquals(h.t, h.s.pulseAtMs)
-    }
-
-    @Test fun leadersForThreePanelStack() {
-        val h = PH.sim().card("a", ""","body":"x"""").card("b").cmd("display.stats", """{"title":"s","id":"c","metrics":[{"label":"a","value":"1"}]}""")
-        val ps = h.s.panels.panels
-        assertEquals(listOf("c", "b", "a"), ps.map { it.id })
-        val e = ps.map { PanelHeights.estimatePx(it) }
-        val l = toOrbSnapshot(h.s).leaders
-        assertEquals(3, l.size)
-        assertEquals(64f + e[0] / 2f, l[0].yPx, 0.01f)
-        assertEquals(64f + e[0] + 16 + e[1] / 2f, l[1].yPx, 0.01f)
-        assertEquals(64f + e[0] + 16 + e[1] + 16 + e[2] / 2f, l[2].yPx, 0.01f)
-        assertEquals(ps[1].revealStartMs, l[1].revealStartMs)
-        assertEquals(listOf(0L, 0L, 0L), l.map { it.pulseAtMs })
-        h.after(500).card("b")
-        val l2 = toOrbSnapshot(h.s).leaders
-        assertEquals(h.t, l2[1].pulseAtMs) // C15 data pulse on in-place update
-        assertEquals(0L, l2[0].pulseAtMs)
-    }
-
-    @Test fun leadersSkipChips() {
-        val h = inCall().card("s", STICKY).card("n")
-        h.after(10, Intent.HangUp)
-        h.card("z")
-        val l = toOrbSnapshot(h.s).leaders
-        assertEquals(3, l.size) // n and z docked, so s is pulled into the dock as well
-        h.send(Intent.DismissPanel("n")).send(Intent.DismissPanel("z"))
-        assertEquals(0, toOrbSnapshot(h.s).leaders.size) // s alone, no call: a chip, no leader
     }
 }

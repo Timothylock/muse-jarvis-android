@@ -2,7 +2,6 @@ package dev.timlock.jarvis.core.store
 
 import dev.timlock.jarvis.core.model.Panel
 import dev.timlock.jarvis.core.model.PanelContent
-import dev.timlock.jarvis.core.model.PanelPlacement
 import dev.timlock.jarvis.core.model.PanelStack
 import dev.timlock.jarvis.core.model.PanelType
 
@@ -20,8 +19,7 @@ object PanelHeights {
                 val bullets = minOf(c.bullets.size, 6) + (if (c.moreBullets > 0) 1 else 0)
                 (TITLE_ROW + bodyLines * LINE + bullets * LINE + 24).coerceIn(120, 420)
             }
-            // 1 row: 56 title + 64 value + 24 label + 16 pad (+30 caption); 2 compact rows fill the 210 max.
-            is PanelContent.Stats -> if (c.metrics.size > 3) 210 else if (c.caption != null) 190 else 160
+            is PanelContent.Stats -> if (c.metrics.size <= 3) 150 else 210
             is PanelContent.ListBody -> (TITLE_ROW + minOf(c.items.size, 10) * LINE + 24).coerceIn(120, 520)
             is PanelContent.Timer -> 150
         }
@@ -37,16 +35,8 @@ object PanelManager {
     const val TIMER_RING_MS = 60_000L
     const val STATS_TTL_MS = 90_000L
     const val DEFAULT_TTL_MS = 120_000L
-    /** Arrival timeline offset (review C9): panels that skip the orb-slide stage start at the bracket stage. */
-    const val BRACKET_STAGE_MS = 380L
 
     fun isSticky(p: Panel) = p.sticky || p.pinned
-
-    /** Panels that persist on their own (sticky, pinned, timers) are chips while no call is open (H1 ruling). */
-    fun persists(p: Panel) = isSticky(p) || p.type == PanelType.TIMER
-
-    private fun placementFor(p: Panel, callOpen: Boolean) =
-        if (callOpen) PanelPlacement.DOCK else if (persists(p)) PanelPlacement.CHIP else PanelPlacement.DOCK
 
     private fun ttlFor(p: Panel, cardListTtlMs: Long) = if (p.type == PanelType.STATS) STATS_TTL_MS else cardListTtlMs
 
@@ -63,12 +53,10 @@ object PanelManager {
 
     fun upsert(
         stack: PanelStack, panel: Panel, now: Long, callOpen: Boolean, ttl: Long = DEFAULT_TTL_MS,
-        /** True when the orb layout was already DOCKED before this input (C9 revealStartMs rule). */
-        dockedBefore: Boolean = false,
     ): PanelStack {
         var toast = stack.replacedToastAtMs
         val idx = stack.panels.indexOfFirst { it.id == panel.id }
-        var placed: Panel
+        val placed: Panel
         var list: List<Panel>
         if (idx >= 0) {
             val old = stack.panels[idx]
@@ -83,11 +71,9 @@ object PanelManager {
                 pinned = old.pinned, sticky = panel.sticky || old.pinned, newRows = newRows,
                 collapsed = old.collapsed,
             )
-            placed = placed.withPlacement(old, callOpen, now, dockedBefore)
             list = stack.panels.toMutableList().also { it[idx] = placed.relife(callOpen, now, ttl) }
         } else {
             placed = panel.copy(createdAtMs = now, updatedAtMs = now, version = 0, pinned = false, collapsed = false, newRows = emptySet())
-            placed = placed.withPlacement(null, callOpen, now, dockedBefore)
             var cur = stack.panels
             if (cur.size >= MAX_PANELS) {
                 val victim = cur.lastOrNull { !isSticky(it) } ?: run { toast = now; cur.last() }
@@ -97,37 +83,6 @@ object PanelManager {
         }
         list = enforceStickyCap(list, placed.id, callOpen, now, ttl)
         return layout(PanelStack(list, toast))
-    }
-
-    /** Placement per the H1 ruling plus the C9 revealStartMs rules. [old] = previous version, null on arrival. */
-    private fun Panel.withPlacement(old: Panel?, callOpen: Boolean, now: Long, dockedBefore: Boolean): Panel {
-        val pl = placementFor(this, callOpen)
-        if (old != null && old.placement == pl) return copy(placement = pl, revealStartMs = old.revealStartMs, collapsed = if (pl == PanelPlacement.CHIP) false else collapsed)
-        val start = if (pl == PanelPlacement.DOCK && !dockedBefore) now else now - BRACKET_STAGE_MS
-        return copy(placement = pl, revealStartMs = start, collapsed = if (pl == PanelPlacement.CHIP) false else collapsed)
-    }
-
-    /** Call ended: sticky/pinned/timer panels leave the dock for chips (non-sticky docked panels stay until they expire). */
-    fun demoteAtCallEnd(stack: PanelStack, now: Long): PanelStack = layout(stack.copy(panels = stack.panels.map {
-        if (it.placement == PanelPlacement.DOCK && persists(it))
-            it.copy(placement = PanelPlacement.CHIP, collapsed = false, revealStartMs = now - BRACKET_STAGE_MS)
-        else it
-    }))
-
-    /**
-     * Placement invariant, applied after every input: chips and a dock never coexist (a top-right chip would sit
-     * on the panel column). Any DOCK panel pulls the chips into the dock (they keep their reveal, so they just
-     * move); with no call open and only persisting panels left, everything goes back to chips (H1).
-     */
-    fun reconcilePlacement(stack: PanelStack, callOpen: Boolean, now: Long): PanelStack {
-        val ps = stack.panels
-        if (ps.none { it.placement == PanelPlacement.DOCK }) return stack
-        val next = if (!callOpen && ps.all { persists(it) }) {
-            ps.map { if (it.placement == PanelPlacement.DOCK) it.copy(placement = PanelPlacement.CHIP, collapsed = false, revealStartMs = now - BRACKET_STAGE_MS) else it }
-        } else {
-            ps.map { if (it.placement == PanelPlacement.CHIP) it.copy(placement = PanelPlacement.DOCK) else it }
-        }
-        return if (next == ps) stack else layout(stack.copy(panels = next))
     }
 
     private fun Panel.relife(callOpen: Boolean, now: Long, ttl: Long) =
@@ -182,37 +137,30 @@ object PanelManager {
         return layout(stack.copy(panels = enforceStickyCap(list, id, callOpen, now, ttl)))
     }
 
-    /** Uncollapse [id]; collapse other DOCK panels (bottom-most first) until the stack fits again. */
+    /** Uncollapse [id]; collapse other panels (bottom-most first) until the stack fits again. */
     fun expand(stack: PanelStack, id: String): PanelStack {
-        if (stack.panels.none { it.id == id && it.collapsed && it.placement == PanelPlacement.DOCK }) return stack
+        if (stack.panels.none { it.id == id && it.collapsed }) return stack
         var list = stack.panels.map { if (it.id == id) it.copy(collapsed = false) else it }
         while (total(list) > ZONE_HEIGHT_PX) {
-            val i = list.indexOfLast { !it.collapsed && it.id != id && it.placement == PanelPlacement.DOCK }
+            val i = list.indexOfLast { !it.collapsed && it.id != id }
             if (i < 0) break
             list = list.toMutableList().also { it[i] = it[i].copy(collapsed = true) }
         }
         return stack.copy(panels = list)
     }
 
-    fun dockPanels(list: List<Panel>): List<Panel> = list.filter { it.placement == PanelPlacement.DOCK }
+    fun total(list: List<Panel>): Int =
+        if (list.isEmpty()) 0 else list.sumOf { PanelHeights.estimatePx(it) } + GAP_PX * (list.size - 1)
 
-    /** Height of the DOCK column only (chips live elsewhere and never collapse). */
-    fun total(list: List<Panel>): Int {
-        val d = dockPanels(list)
-        return if (d.isEmpty()) 0 else d.sumOf { PanelHeights.estimatePx(it) } + GAP_PX * (d.size - 1)
-    }
-
-    /** Fit the DOCK panels into the 656 px zone: collapse bottom-most non-collapsed (never the top); re-expand what fits. */
+    /** Fit the stack into the 656 px zone: collapse bottom-most non-collapsed (never the top); re-expand what fits. */
     fun layout(stack: PanelStack): PanelStack {
-        var list = stack.panels.map { if (it.placement == PanelPlacement.CHIP && it.collapsed) it.copy(collapsed = false) else it }
-        fun dockIdx() = list.indices.filter { list[it].placement == PanelPlacement.DOCK }
+        var list = stack.panels
         while (total(list) > ZONE_HEIGHT_PX) {
-            val d = dockIdx()
-            val i = d.lastOrNull { !list[it].collapsed } ?: break
-            if (i == d.first()) break
+            val i = list.indexOfLast { !it.collapsed }
+            if (i <= 0) break
             list = list.toMutableList().also { it[i] = it[i].copy(collapsed = true) }
         }
-        for (i in dockIdx()) {
+        for (i in list.indices) {
             if (!list[i].collapsed) continue
             val candidate = list.toMutableList().also { it[i] = it[i].copy(collapsed = false) }
             if (total(candidate) <= ZONE_HEIGHT_PX) list = candidate
