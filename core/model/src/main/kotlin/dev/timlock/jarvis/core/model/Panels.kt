@@ -7,13 +7,6 @@ package dev.timlock.jarvis.core.model
  */
 enum class PanelType { CARD, STATS, LIST, TIMER }
 
-/**
- * Where a panel renders (overseer ruling on review H1). DOCK = the 665 px column beside the docked orb.
- * CHIP = compact 260x96 card top-right while the orb stays CENTERED (sticky/pinned panels and timers
- * while no call is open). Only DOCK panels make the layout DOCKED and get leader lines.
- */
-enum class PanelPlacement { DOCK, CHIP }
-
 data class Metric(
     val label: String,
     /** Display-ready value (numbers formatted, max 2 decimals). */
@@ -53,8 +46,6 @@ sealed interface PanelContent {
         val totalSeconds: Int,
         /** Countdown reaches zero at this monotonic time. */
         val endsAtMs: Long,
-        /** Store bookkeeping: the zero-chime has already been requested. */
-        val chimed: Boolean = false,
     ) : PanelContent
 }
 
@@ -83,15 +74,6 @@ data class Panel(
     val collapsed: Boolean = false,
     /** Created while mode == SIM (violet panel marker, §7.6 rule 4). */
     val sim: Boolean = false,
-    val placement: PanelPlacement = PanelPlacement.DOCK,
-    /**
-     * Origin of the arrival timeline (review C9), monotonic ms. First docked panel: == arrival (orb slides
-     * 0-500, leader 250-430, brackets pop 380-500, scan 450-670). Panels arriving while already docked, and
-     * chips: arrival - 380 (they start at the bracket stage). Re-set on DOCK promotion of a chip.
-     */
-    val revealStartMs: Long = createdAtMs,
-    /** Local panel showing a fallback-path text reply (§4.3.1 step 4); not a Muse display command. */
-    val textReply: Boolean = false,
 )
 
 /** Panel stack as rendered, newest first (index 0 = top). Max 3. */

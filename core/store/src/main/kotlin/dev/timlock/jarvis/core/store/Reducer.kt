@@ -215,6 +215,8 @@ private class Ctx(var s: AppState, val now: Long) {
                 if (input.paired) go(if (stableOrb(s) == IDLE) IDLE else OFFLINE) else go(UNPAIRED)
             }
             is Intent.PanelCount -> s = s.copy(panelCount = input.count.coerceAtLeast(0))
+            is Intent.DismissPanel, is Intent.PinPanel, is Intent.ExpandPanel,
+            is Intent.AcknowledgeTimer, is Intent.RestorePanels -> Unit // TODO(M3): panel manager
             Intent.DisplayPulse -> s = s.copy(pulseAtMs = now)
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
             is Intent.SetNight -> s = s.copy(night = input.night)
