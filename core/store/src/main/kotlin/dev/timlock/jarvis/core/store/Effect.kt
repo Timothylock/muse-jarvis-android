@@ -1,9 +1,10 @@
 package dev.timlock.jarvis.core.store
 
+import dev.timlock.jarvis.core.model.CommandResult
 import dev.timlock.jarvis.core.model.Role
 
 enum class HapticKind { TICK }
-enum class EarconKind { CHIRP, ERROR }
+enum class EarconKind { CHIRP, ERROR, TIMER_CHIME }
 
 /** Side effects requested by the reducer; executed by the transport/audio layer (M5). */
 sealed interface Effect {
@@ -25,6 +26,10 @@ sealed interface Effect {
     data class Haptic(val kind: HapticKind) : Effect
     data class Earcon(val kind: EarconKind) : Effect
     /** [text] may be server content: never log it. */
+    /** Reply to a display command (§5.1); the app forwards it to transport.replyCommand. */
+    data class ReplyCommand(val invocationId: String, val result: CommandResult) : Effect
+    /** Sticky panels/timers changed (real mode): persist [stack] (§5.5). */
+    data class PersistPanels(val stack: dev.timlock.jarvis.core.model.PanelStack) : Effect
     data class ShowCaption(val text: String, val role: Role? = null, val final: Boolean = true) : Effect
 }
 

@@ -5,6 +5,7 @@ import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbLayout
 import dev.timlock.jarvis.core.model.OrbState
+import dev.timlock.jarvis.core.model.PanelStack
 import dev.timlock.jarvis.core.transport.TransportEvent
 
 /** Push-to-talk control state (§4.3). */
@@ -55,8 +56,11 @@ data class AppState(
     // Orb snapshot feeders
     val layout: OrbLayout = OrbLayout.FIRST_RUN,
     val layoutSinceMs: Long = 0L,
-    /** TODO(M3): driven by the panel manager via Intent.PanelCount. */
+    /** Visible panels (§2.5); owned by the panel manager. [panelCount] mirrors panels.size. */
+    val panels: PanelStack = PanelStack(),
     val panelCount: Int = 0,
+    /** Arrival times of recent display commands for the 10-per-5 s rate limit (§5.3). */
+    val displayHits: List<Long> = emptyList(),
     val pulseAtMs: Long = 0L,
     val attentionAtMs: Long = 0L,
     val shakeAtMs: Long = 0L,
@@ -98,7 +102,18 @@ sealed interface Intent : Input {
     data object PairingOpen : Intent
     data class PairingClosed(val paired: Boolean) : Intent
 
-    /** TODO(M3): panel manager drives these. */
+    /** User: swipe right / tap × (§2.5). */
+    data class DismissPanel(val id: String) : Intent
+    /** User: long-press toggles pin (pinned = sticky, pin glyph). */
+    data class PinPanel(val id: String, val pinned: Boolean) : Intent
+    /** User: tap a collapsed title strip to expand it (another panel collapses instead). */
+    data class ExpandPanel(val id: String) : Intent
+    /** User: tap a ringing timer to acknowledge it (removes it). */
+    data class AcknowledgeTimer(val id: String) : Intent
+    /** Restore persisted sticky panels/timers at boot (real mode only, §5.5). */
+    data class RestorePanels(val stack: PanelStack) : Intent
+
+    /** Legacy/manual override of the panel count (tests); the panel manager normally derives it. */
     data class PanelCount(val count: Int) : Intent
     data object DisplayPulse : Intent
     data object AttentionPulse : Intent
