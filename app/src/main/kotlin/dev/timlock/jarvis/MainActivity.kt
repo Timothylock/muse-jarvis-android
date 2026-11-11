@@ -24,10 +24,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbLayout
 import dev.timlock.jarvis.core.model.OrbState
-import dev.timlock.jarvis.core.model.Panel
-import dev.timlock.jarvis.core.model.PanelContent
 import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
+import dev.timlock.jarvis.core.store.PanelHeights
 import dev.timlock.jarvis.render.orb.OrbSurfaceView
 import dev.timlock.jarvis.ui.hud.AmbientFace
 import dev.timlock.jarvis.ui.hud.FirstRunScreen
@@ -129,7 +128,7 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                                 layoutDocked = state.layout == OrbLayout.DOCKED,
                                 layoutSinceMs = state.layoutSinceMs,
                                 speaking = state.orbState == OrbState.SPEAKING,
-                                heightPx = ::panelHeightPx,
+                                heightPx = PanelHeights::estimatePx,
                                 onDismiss = { vm.store.dispatch(StoreIntent.DismissPanel(it)) },
                                 onPin = { id, pinned -> vm.store.dispatch(StoreIntent.PinPanel(id, pinned)) },
                                 onExpand = { vm.store.dispatch(StoreIntent.ExpandPanel(it)) },
@@ -141,16 +140,5 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
             }
             if (state.mode == Mode.SIM) SimFrame()
         }
-    }
-}
-
-/** TODO(M3-merge): use PanelHeights.estimatePx. Temporary local estimate in design px. */
-private fun panelHeightPx(p: Panel): Int = when {
-    p.collapsed -> 56
-    else -> when (val c = p.content) {
-        is PanelContent.Card -> 220
-        is PanelContent.Stats -> if (c.metrics.size <= 3) 150 else 210
-        is PanelContent.ListBody -> 56 + minOf(c.items.size, 10) * 34 + 24
-        is PanelContent.Timer -> 150
     }
 }

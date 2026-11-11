@@ -154,7 +154,7 @@ class PanelManagerTest {
         assertEquals(120, PanelHeights.estimatePx(card("a")))
         assertEquals(56 + 2 * 34 + 24, PanelHeights.estimatePx(card("a", body = "x".repeat(45))))
         assertEquals(56 + 6 * 34 + 24, PanelHeights.estimatePx(card("a", body = "x".repeat(1000))))
-        assertEquals(150, PanelHeights.estimatePx(stats("s", 3)))
+        assertEquals(160, PanelHeights.estimatePx(stats("s", 3)))
         assertEquals(210, PanelHeights.estimatePx(stats("s", 4)))
         assertEquals(150, PanelHeights.estimatePx(timer("t", 5)))
         assertEquals(120, PanelHeights.estimatePx(list("l", "a")))

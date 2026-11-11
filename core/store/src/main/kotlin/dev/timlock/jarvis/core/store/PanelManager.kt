@@ -19,7 +19,8 @@ object PanelHeights {
                 val bullets = minOf(c.bullets.size, 6) + (if (c.moreBullets > 0) 1 else 0)
                 (TITLE_ROW + bodyLines * LINE + bullets * LINE + 24).coerceIn(120, 420)
             }
-            is PanelContent.Stats -> if (c.metrics.size <= 3) 150 else 210
+            // 1 row: 56 title + 64 value + 24 label + 16 pad (+30 caption); 2 compact rows fill the 210 max.
+            is PanelContent.Stats -> if (c.metrics.size > 3) 210 else if (c.caption != null) 190 else 160
             is PanelContent.ListBody -> (TITLE_ROW + minOf(c.items.size, 10) * LINE + 24).coerceIn(120, 520)
             is PanelContent.Timer -> 150
         }
