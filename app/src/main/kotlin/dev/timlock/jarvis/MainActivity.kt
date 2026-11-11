@@ -23,6 +23,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbState
+import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
 import dev.timlock.jarvis.render.orb.OrbSurfaceView
 import dev.timlock.jarvis.ui.hud.AmbientFace
@@ -35,7 +36,6 @@ import dev.timlock.jarvis.ui.hud.SimInterstitial
 import kotlinx.coroutines.delay
 
 private const val EXTRA_MODE = "jarvis.mode"
-private const val EXTRA_DEBUG_ORB = "jarvis.debugorb" // TEMP(M2) removed at merge
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -47,7 +47,6 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemBars()
         // Only honor the launch extra on a fresh start, not on recreation.
-        vm.setDebugOrb(intent?.getStringExtra(EXTRA_DEBUG_ORB)) // TEMP(M2) removed at merge
         vm.start(if (savedInstanceState == null) intent?.getStringExtra(EXTRA_MODE) else null)
         setContent { MuseDeskApp(vm) { orbView = it } }
     }
@@ -56,7 +55,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         vm.onModeExtra(intent.getStringExtra(EXTRA_MODE))
-        vm.setDebugOrb(intent.getStringExtra(EXTRA_DEBUG_ORB)) // TEMP(M2) removed at merge
     }
 
     override fun onResume() {
@@ -91,7 +89,7 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
 
     LaunchedEffect(interstitialUntil) {
         if (interstitialUntil != null) {
-            delay((interstitialUntil - System.currentTimeMillis()).coerceAtLeast(0))
+            delay((interstitialUntil - monoMillis()).coerceAtLeast(0))
             vm.store.dispatch(StoreIntent.ClearInterstitial)
         }
     }
