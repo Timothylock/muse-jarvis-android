@@ -3,7 +3,7 @@
 # app PSS (MB), app CPU % (top), thermal status, and the last JARVIS_PERF line (fps/p50/p95/tier/particles).
 # Usage: dev/soak.sh <minutes> [interval_s] [scenario_id]   -> dev/out/soak-<ts>.csv (+ summary on stdout)
 # If scenario_id is given (sim mode), it is restarted whenever the previous run has finished.
-set -euo pipefail
+set -uo pipefail  # no -e: one failed sample (adb hiccup, empty grep) must not end the soak
 cd "$(dirname "$0")/.."
 MIN=${1:?minutes}; INT=${2:-60}; SCN=${3:-}
 PKG=dev.timlock.jarvis
