@@ -86,6 +86,17 @@ Each command logs one JSON line to logcat tag `JARVIS_SIM`. Most commands only w
 Real-mode pairing helpers: `export_identity`, `import_pairing`, `provision_token`, `unpair`, `pair_selftest`
 (a headless loopback of the SDK setup protocol), and `ble_smoke`.
 
+Test hooks (both modes; real mode also needs the developer flag and an online link):
+`dev_setting --es key test_input --ez on true|false` (default off; `--es key test_thread_id --es value <id>` sets an
+optional test thread), `inject_wav --es name <wav> [--es thread_id <id>] [--ez hangup false] [--el timeout_ms N]`
+feeds `files/test_wav/<wav>.wav` (mono 16-bit PCM, any rate, resampled to 24 kHz) as the mic input of one
+push-to-talk turn and logs the orb path and call stats; the HUD shows an amber `TEST INPUT` chip meanwhile.
+`make_wav --es name <wav> --es text "<words>"` synthesizes a WAV with on-device TTS, prefixed with the spoken
+words "Test input." (the reference tablet's system image has no TTS engine; push WAVs with
+`adb push x.wav /sdcard/Android/data/dev.timlock.jarvis/files/test_wav/` instead). `list_wav` lists them.
+`diag` includes `testInput`, `callStats` (the open call) and `lastCall` (admission and first-audio latency,
+frames sent and received, end reason).
+
 Launch extras: `am start -n dev.timlock.jarvis/.MainActivity --es jarvis.mode sim|real [--es jarvis.scenario <id>]`.
 `dev/sim.sh` and `dev/scenarios.sh` (run every scenario unattended and summarize its assertions) build on this.
 
