@@ -76,7 +76,7 @@ fun reduce(state: AppState, input: Input, now: Long, log: (String) -> Unit = {})
 /** Sticky/pinned panels and timers, minus transient layout/expiry bookkeeping (§5.5). */
 private fun persistable(st: PanelStack): List<dev.timlock.jarvis.core.model.Panel> =
     st.panels.filter { PanelManager.isSticky(it) || it.type == PanelType.TIMER }
-        .map { it.copy(collapsed = false, expiresAtMs = null, newRows = emptySet()) }
+        .map { it.copy(collapsed = false, expiresAtMs = null, newRows = emptySet(), placement = PanelPlacement.CHIP, revealStartMs = 0L) }
 
 private fun TransportKind.toMode(): Mode = if (this == TransportKind.SIM) Mode.SIM else Mode.REAL
 
@@ -464,6 +464,8 @@ private class Ctx(var s: AppState, val now: Long) {
     // ---- derived fields -----------------------------------------------------------------
 
     fun finish() {
+        val placed = PanelManager.reconcilePlacement(s.panels, callOpen, now)
+        if (placed !== s.panels) s = s.copy(panels = placed)
         if (m != STANDBY && (s.countdownStartMs != 0L || s.countdownEndMs != 0L)) {
             s = s.copy(countdownStartMs = 0L, countdownEndMs = 0L)
         }

@@ -215,4 +215,21 @@ class PanelManagerTest {
         assertFalse(s.panels.first { it.id == "chip" }.collapsed)
         assertTrue(s.panels.first { it.id == "a" }.collapsed)
     }
+
+    @Test fun reconcilePromotesChipsWhenAnyPanelDocks() {
+        val chip = PanelStack().up(timer("t", 1_000_000), 1)
+        assertEquals(dev.timlock.jarvis.core.model.PanelPlacement.CHIP, chip.panels[0].placement)
+        // Call opens, Muse pushes a card: the card docks, so the idle chip must join the dock (no overlap).
+        val withCard = PanelManager.reconcilePlacement(chip.up(card("c"), 2, call = true), callOpen = true, now = 2)
+        assertTrue(withCard.panels.all { it.placement == dev.timlock.jarvis.core.model.PanelPlacement.DOCK })
+    }
+
+    @Test fun reconcileDemotesWhenOnlyPersistingPanelsRemainIdle() {
+        var s = PanelStack().up(card("c"), 1, call = true).up(card("k", sticky = true), 2, call = true)
+        s = PanelManager.dismiss(s, "c")
+        val idle = PanelManager.reconcilePlacement(s, callOpen = false, now = 3)
+        assertEquals(dev.timlock.jarvis.core.model.PanelPlacement.CHIP, idle.panels.single().placement)
+        // Still docked while the call is open.
+        assertEquals(dev.timlock.jarvis.core.model.PanelPlacement.DOCK, PanelManager.reconcilePlacement(s, callOpen = true, now = 3).panels.single().placement)
+    }
 }
