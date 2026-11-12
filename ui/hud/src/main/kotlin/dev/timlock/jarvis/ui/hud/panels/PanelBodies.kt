@@ -1,5 +1,8 @@
 package dev.timlock.jarvis.ui.hud.panels
 
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -131,7 +134,16 @@ private fun StatsBody(stats: PanelContent.Stats) {
     val px = LocalPx.current
     val metrics = stats.metrics.take(6)
     val compact = metrics.size > 3
-    val role = if (compact) JarvisType.MetricCompact else JarvisType.MetricStat
+    // Plex Mono advance is 0.6 em. Shrink one size for the whole panel so the widest value+unit fits its column.
+    val cellPx = (665f - 48f) / 3f - 12f
+    fun widthAt(sz: Float, m: Metric) = 0.6f * sz * m.value.length + (m.unit?.let { 0.6f * 26f * it.length + 6f } ?: 0f)
+    val base = if (compact) JarvisType.MetricCompact.sizePx else JarvisType.MetricStat.sizePx
+    val sizePx = metrics.fold(base) { acc, m ->
+        if (widthAt(acc, m) <= cellPx) acc
+        else if (!compact && widthAt(JarvisType.MetricCompact.sizePx, m) <= cellPx) JarvisType.MetricCompact.sizePx
+        else minOf(acc, JarvisType.MetricCompact.sizePx, ((cellPx - (widthAt(0f, m))) / (0.6f * m.value.length)).coerceAtLeast(24f))
+    }
+    val role = (if (compact) JarvisType.MetricCompact else JarvisType.MetricStat).copy(sizePx = sizePx)
     val rows = metrics.chunked(3)
     Column(
         Modifier.fillMaxSize().padding(start = px.dp(24f), end = px.dp(24f), bottom = px.dp(8f)),
@@ -139,13 +151,14 @@ private fun StatsBody(stats: PanelContent.Stats) {
     ) {
         Column {
             for (row in rows) {
-                Row(Modifier.fillMaxWidth()) {
+                // Fixed row pitch so two compact rows always fit the 210 px cap (§2.5): 44 value + 20 label.
+                Row(Modifier.fillMaxWidth().height(px.dp(if (compact) 64f else 90f))) {
                     for (m in row) Box(Modifier.weight(1f)) { MetricCell(m, role) }
                     repeat(3 - row.size) { Box(Modifier.weight(1f)) }
                 }
             }
         }
-        stats.caption?.let {
+        stats.caption?.takeIf { rows.size == 1 }?.let {
             Text(
                 it,
                 style = JarvisType.Caption.copy(sizePx = if (rows.size > 1) 20f else 24f).style(JarvisColors.TextSecondary),
@@ -159,24 +172,31 @@ private fun StatsBody(stats: PanelContent.Stats) {
 @Composable
 private fun MetricCell(m: Metric, role: dev.timlock.jarvis.ui.hud.TypeRole) {
     val px = LocalPx.current
-    val valueStyle = role.style(JarvisColors.CyanBright).copy(lineHeight = px.sp(role.sizePx))
+    val valueStyle = role.style(JarvisColors.CyanBright)
     val unitStyle = JarvisType.MetricUnit.style(JarvisColors.TextSecondary)
+    // Fixed slots (value = font size, label = 20 px); glyphs may overhang their slot but never push the label down.
     Column {
-        Text(
-            buildAnnotatedString {
-                append(m.value)
-                m.unit?.let { u ->
-                    if (!m.unitAttached) append(THIN_SPACE)
-                    withStyle(SpanStyle(fontFamily = unitStyle.fontFamily, fontSize = unitStyle.fontSize, color = unitStyle.color)) { append(u) }
-                }
-            },
-            style = valueStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
-        )
-        Text(
-            m.label.uppercase(),
-            style = JarvisType.StatusBar.style(JarvisColors.TextSecondary).copy(lineHeight = px.sp(20f)),
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
+        Box(Modifier.fillMaxWidth().height(px.dp(if (role.sizePx > 44f) 64f else 44f)), contentAlignment = Alignment.CenterStart) {
+            Text(
+                buildAnnotatedString {
+                    append(m.value)
+                    m.unit?.let { u ->
+                        if (!m.unitAttached) append(THIN_SPACE)
+                        withStyle(SpanStyle(fontFamily = unitStyle.fontFamily, fontSize = unitStyle.fontSize, color = unitStyle.color)) { append(u) }
+                    }
+                },
+                style = valueStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+                modifier = Modifier.wrapContentHeight(unbounded = true),
+            )
+        }
+        Box(Modifier.fillMaxWidth().height(px.dp(20f)), contentAlignment = Alignment.CenterStart) {
+            Text(
+                m.label.uppercase(),
+                style = JarvisType.StatusBar.style(JarvisColors.TextSecondary),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.wrapContentHeight(unbounded = true),
+            )
+        }
     }
 }
 

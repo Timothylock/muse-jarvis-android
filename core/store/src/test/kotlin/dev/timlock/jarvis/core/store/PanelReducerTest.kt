@@ -257,14 +257,15 @@ class PanelReducerTest {
         assertEquals(h.t + 380, h.s.pulseAtMs)
     }
 
-    @Test fun pinDoesNotChangePlacement() {
+    @Test fun pinPlacementFollowsH1() {
+        val inCallPin = inCall().card("a")
+        inCallPin.send(Intent.PinPanel("a", true))
+        assertEquals(PanelPlacement.DOCK, inCallPin.place("a")) // call open: stays docked
         val h = PH.sim().card("a")
         h.send(Intent.PinPanel("a", true))
-        assertEquals(PanelPlacement.DOCK, h.place("a"))
-        h.send(Intent.PinPanel("a", false))
-        assertEquals(PanelPlacement.DOCK, h.place("a"))
+        assertEquals(PanelPlacement.CHIP, h.place("a")) // no call, only persisting panels: chip (H1)
         val c = PH.sim().card("w", STICKY)
-        c.send(Intent.PinPanel("w", false))
+        c.send(Intent.PinPanel("w", true))
         assertEquals(PanelPlacement.CHIP, c.place("w"))
     }
 
@@ -282,9 +283,11 @@ class PanelReducerTest {
     @Test fun lastDockLeavingStartsReturnTimerEvenWithChipsPresent() {
         val h = inCall().card("s", STICKY).card("n")
         h.after(1000, Intent.HangUp)
-        assertEquals(PanelPlacement.CHIP, h.place("s"))
+        // Chips and a dock never coexist: while non-sticky "n" is docked, sticky "s" stays in the dock too.
+        assertEquals(PanelPlacement.DOCK, h.place("s"))
         assertEquals(PanelPlacement.DOCK, h.place("n"))
         h.send(Intent.DismissPanel("n"))
+        assertEquals(PanelPlacement.CHIP, h.place("s"))
         assertEquals(OrbLayout.DOCKED, h.s.layout)
         h.after(LAYOUT_RETURN_MS - 1)
         assertEquals(OrbLayout.DOCKED, h.s.layout)
@@ -337,7 +340,8 @@ class PanelReducerTest {
         h.after(10, Intent.HangUp)
         h.card("z")
         val l = toOrbSnapshot(h.s).leaders
-        assertEquals(2, l.size) // n and z docked; s is a chip
-        assertEquals(64f + PanelHeights.estimatePx(h.s.panels.panels.first { it.id == "z" }) / 2f, l[0].yPx, 0.01f)
+        assertEquals(3, l.size) // n and z docked, so s is pulled into the dock as well
+        h.send(Intent.DismissPanel("n")).send(Intent.DismissPanel("z"))
+        assertEquals(0, toOrbSnapshot(h.s).leaders.size) // s alone, no call: a chip, no leader
     }
 }

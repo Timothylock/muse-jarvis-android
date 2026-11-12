@@ -114,6 +114,22 @@ object PanelManager {
         else it
     }))
 
+    /**
+     * Placement invariant, applied after every input: chips and a dock never coexist (a top-right chip would sit
+     * on the panel column). Any DOCK panel pulls the chips into the dock (they keep their reveal, so they just
+     * move); with no call open and only persisting panels left, everything goes back to chips (H1).
+     */
+    fun reconcilePlacement(stack: PanelStack, callOpen: Boolean, now: Long): PanelStack {
+        val ps = stack.panels
+        if (ps.none { it.placement == PanelPlacement.DOCK }) return stack
+        val next = if (!callOpen && ps.all { persists(it) }) {
+            ps.map { if (it.placement == PanelPlacement.DOCK) it.copy(placement = PanelPlacement.CHIP, collapsed = false, revealStartMs = now - BRACKET_STAGE_MS) else it }
+        } else {
+            ps.map { if (it.placement == PanelPlacement.CHIP) it.copy(placement = PanelPlacement.DOCK) else it }
+        }
+        return if (next == ps) stack else layout(stack.copy(panels = next))
+    }
+
     private fun Panel.relife(callOpen: Boolean, now: Long, ttl: Long) =
         copy(expiresAtMs = lifetime(this, callOpen, now, ttl))
 

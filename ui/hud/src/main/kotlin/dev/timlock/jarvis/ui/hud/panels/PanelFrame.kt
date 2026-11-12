@@ -46,9 +46,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.timlock.jarvis.core.model.Panel
+import dev.timlock.jarvis.core.model.PanelContent
 import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.ui.hud.JarvisColors
 import dev.timlock.jarvis.ui.hud.JarvisType
@@ -214,6 +216,17 @@ private fun TitleRow(panel: Panel, compact: Boolean) {
         if (panel.sim) {
             Spacer(Modifier.width(px.dp(12f)))
             SimBadge()
+        }
+        // Two-row stats have no room for a caption line under the 210 px cap (§2.5): it moves into the title row.
+        val content = panel.content
+        if (!compact && content is PanelContent.Stats && content.metrics.size > 3 && content.caption != null) {
+            Spacer(Modifier.width(px.dp(16f)))
+            Text(
+                content.caption!!,
+                style = JarvisType.Caption.copy(sizePx = 20f).style(JarvisColors.TextSecondary),
+                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.End,
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
