@@ -7,7 +7,7 @@ import androidx.core.content.ContextCompat
 class JarvisApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        AppGraph.start()
+        AppGraph.start(this)
         // §7.7 ADB surface. Registered at runtime because Android 8+ does not deliver implicit
         // broadcasts (`am broadcast -a dev.timlock.jarvis.SIM` without -n) to manifest receivers.
         // Guarded by DUMP, which only the adb shell (and system) hold.

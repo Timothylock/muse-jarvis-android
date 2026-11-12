@@ -17,6 +17,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val store get() = AppGraph.store
     val orbHolder get() = AppGraph.orbHolder
     val audioBus get() = AppGraph.audioBus
+    val perfHud get() = AppGraph.perfHud
     private val modeStore = ModeStore(app)
 
     private sealed interface Cmd {
@@ -24,6 +25,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         data class Boot(val override: String?) : Cmd
         data class Choose(val mode: Mode) : Cmd
         data object Reset : Cmd
+        data class Scenario(val id: String, val timescale: Float?, val autoPttMs: Long?) : Cmd
     }
 
     private val commands = Channel<Cmd>(Channel.UNLIMITED)
@@ -38,6 +40,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     is Cmd.Boot -> boot(cmd.override)
                     is Cmd.Choose -> applyMode(cmd.mode, persist = true)
                     Cmd.Reset -> reset()
+                    is Cmd.Scenario -> {
+                        if (store.state.value.mode != Mode.SIM) Log.w("JARVIS_SIM", "jarvis.scenario ignored: not in sim mode")
+                        else AppGraph.simController.play(cmd.id, cmd.timescale, cmd.autoPttMs)?.let { Log.w("JARVIS_SIM", "jarvis.scenario failed: $it") }
+                    }
                 }
             }
         }
@@ -59,6 +65,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             null -> Unit
             else -> Log.w("JARVIS_UI", "unknown jarvis.mode extra")
         }
+    }
+
+    /** Launch extras `jarvis.scenario` / `jarvis.timescale` / `jarvis.auto_ptt_ms`; runs after any pending mode change. */
+    fun onScenarioExtras(id: String?, timescale: Float?, autoPttMs: Long?) {
+        if (id.isNullOrBlank()) return
+        commands.trySend(Cmd.Scenario(id.trim(), timescale, autoPttMs))
     }
 
     fun choose(mode: Mode) { commands.trySend(Cmd.Choose(mode)) }

@@ -32,12 +32,13 @@ fun AmbientFace(
     hasDockedPanels: Boolean = false,
     /** Drawn over the face (above the status bar and clock), e.g. the panel stack. */
     overlay: @Composable () -> Unit = {},
+    onSimChipClick: (() -> Unit)? = null,
 ) {
     val px = LocalPx.current
     val now by rememberNow()
     Box(modifier.fillMaxSize()) {
         orb()
-        StatusBar(mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart))
+        StatusBar(mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart), onSimChipClick)
 
         if (!hasDockedPanels) {
             // Clock: top-left of the content area (content starts at y=48).
