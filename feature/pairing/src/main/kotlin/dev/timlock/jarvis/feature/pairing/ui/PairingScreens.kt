@@ -303,9 +303,10 @@ private fun CheckRow(status: CheckStatus, label: String, action: String?, onActi
 private fun WindowStep(st: FlowState) {
     val px = LocalPx.current
     Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-        // The orb (PAIRING layout: center (670,200), 260 px) occupies y 70..330 of the design canvas; header is 64 px.
-        Spacer(Modifier.height(px.dp(284f)))
-        BodyText("On your phone: Muse app → Gadgets → Add → choose", JarvisColors.TextPrimary)
+        // The orb (PAIRING layout: center (670,280), ring 260 px, drawn extent 1.6 R = 208 px) occupies
+        // y 72..488 of the design canvas, just below the 64 px header; this column starts under the header.
+        Spacer(Modifier.height(px.dp(424f)))
+        BodyText("On your phone: Muse app → Settings → Devices → tap + → choose", JarvisColors.TextPrimary)
         Spacer(Modifier.height(px.dp(14f)))
         Box(
             Modifier

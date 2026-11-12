@@ -28,7 +28,7 @@ fun FirstRunScreen(
     onSimulate: () -> Unit,
     onImport: () -> Unit,
     modifier: Modifier = Modifier,
-    /** Fills the whole screen behind the content (the GL orb, center (670,226) d=300). */
+    /** Fills the whole screen behind the content (the GL orb, center (670,222) d=260). */
     orb: @Composable () -> Unit = { DefaultFirstRunOrb() },
 ) {
     val px = LocalPx.current
@@ -39,8 +39,8 @@ fun FirstRunScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top,
     ) {
-        // Space reserved for the orb (y 76..376).
-        Spacer(Modifier.height(px.dp(76f + 300f)))
+        // Space reserved for the orb (center y 222, ring 260 px, drawn extent 1.6 R -> y 14..430).
+        Spacer(Modifier.height(px.dp(430f)))
         Spacer(Modifier.height(px.dp(20f)))
         Text(
             "Connect this display to Muse",
@@ -73,11 +73,11 @@ fun FirstRunScreen(
     }
 }
 
-/** Preview stand-in: orb center (670, 226), diameter 300. */
+/** Preview stand-in: orb center (670, 222), diameter 260. */
 @Composable
 private fun DefaultFirstRunOrb() {
     val px = LocalPx.current
-    Box(Modifier.offset(px.dp(670f - 150f), px.dp(226f - 150f))) { PlaceholderOrb(300f) }
+    Box(Modifier.offset(px.dp(670f - 130f), px.dp(222f - 130f))) { PlaceholderOrb(260f) }
 }
 
 @Composable

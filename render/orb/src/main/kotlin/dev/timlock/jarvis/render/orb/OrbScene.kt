@@ -618,9 +618,12 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         const val LEAD_W = 13f
         const val LEADER_X = 625f
         // CENTERED, DOCKED, PAIRING, FIRST_RUN (OrbLayout ordinal order)
+        // LAY_D is the ring diameter (R = D/2), but the orb DRAWS well past it: the grid reaches 1.6 R and
+        // particles ~1.45 R. The small (PAIRING / FIRST_RUN) layouts are placed so the full 1.6 R extent
+        // stays on screen and below the 64 px pairing header: PAIRING y 72..488, FIRST_RUN y 14..430.
         val LAY_CX = floatArrayOf(670f, 305f, 670f, 670f)
-        val LAY_CY = floatArrayOf(392f, 392f, 200f, 226f)
-        val LAY_D = floatArrayOf(520f, 440f, 260f, 300f)
+        val LAY_CY = floatArrayOf(392f, 392f, 280f, 222f)
+        val LAY_D = floatArrayOf(520f, 440f, 260f, 260f)
         // draw-in order index per layer: core first, then outward
         val BOOT_ORDER = floatArrayOf(8f, 7f, 6f, 5f, 4f, 3f, 2f, 1f, 0f, 1f, 9f)
     }
