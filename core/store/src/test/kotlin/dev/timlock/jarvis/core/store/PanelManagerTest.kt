@@ -202,4 +202,17 @@ class PanelManagerTest {
         assertFalse(s.panels[0].collapsed)
         assertTrue(PanelManager.total(s.panels) <= 656)
     }
+
+    @Test fun collapseIgnoresChips() {
+        val big = { id: String -> list(id, *Array(30) { "i$it" }) } // 420 each
+        val chip = big("chip").copy(placement = dev.timlock.jarvis.core.model.PanelPlacement.CHIP)
+        var s = PanelStack().up(big("a"), 1)
+        s = PanelManager.layout(s.copy(panels = listOf(chip) + s.panels))
+        assertFalse(s.panels.any { it.collapsed })
+        assertEquals(420, PanelManager.total(s.panels)) // chip not counted
+        s = s.up(big("b"), 3)
+        assertEquals(listOf("b", "chip", "a"), ids(s))
+        assertFalse(s.panels.first { it.id == "chip" }.collapsed)
+        assertTrue(s.panels.first { it.id == "a" }.collapsed)
+    }
 }
