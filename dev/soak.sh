@@ -18,9 +18,10 @@ while [ "$(date +%s)" -lt "$end" ]; do
       dev/nas.sh adb shell "am broadcast -a dev.timlock.jarvis.SIM --es cmd scenario --es id $SCN --el auto_ptt_ms 1500" >/dev/null 2>&1 || true
     fi
   fi
-  raw=$(dev/nas.sh adb shell "dumpsys meminfo $PKG | grep 'TOTAL PSS'; top -b -n 1 | grep $PKG | head -1; dumpsys thermalservice | grep -m1 'Thermal Status'; logcat -d -s JARVIS_PERF | grep fps | tail -1" 2>/dev/null || true)
+  # nas.sh joins args into a container-side sh -c, so device-side pipes don't work: one adb call each, filter locally.
+  raw=$( { dev/nas.sh adb shell dumpsys meminfo $PKG; dev/nas.sh adb shell top -b -n 1; dev/nas.sh adb shell dumpsys thermalservice; dev/nas.sh adb logcat -d -t 40 -s JARVIS_PERF; } 2>/dev/null || true)
   pss=$(echo "$raw" | awk '/TOTAL PSS/ {printf "%.0f", $3/1024; exit}')
-  cpu=$(echo "$raw" | awk -v p=$PKG '$0 ~ p && $9 ~ /^[0-9.]+$/ {print $9; exit}')
+  cpu=$(echo "$raw" | awk -v p=$PKG '$NF ~ p && $9 ~ /^[0-9.]+$/ {print $9; exit}')
   th=$(echo "$raw" | awk -F': *' '/Thermal Status/ {print $2; exit}')
   perf=$(echo "$raw" | grep -o '{"fps".*}' | tail -1)
   j() { echo "$perf" | grep -o "\"$1\":[^,}]*" | head -1 | cut -d: -f2 | tr -d '"'; }

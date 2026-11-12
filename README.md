@@ -27,6 +27,12 @@ The app runs on any arm64 Android 8+ device, but performance budgets are tuned f
 - **Simulation mode**: a scripted `SimTransport` (18 scenarios, fault injection, a debug drawer, an ADB control
   surface) exercises every screen and failure without a pairing. Simulation is always visibly marked (violet
   frame, chips, orb ring, panel edges, `SIM ›` captions).
+- **Settings and night dim**: a full-screen settings overlay (the ⚙ glyph, or a long press on the status bar)
+  covers connection, voice (standby window, think timeout, mic gain), display (panel lifetime, max panels,
+  12/24 h clock, night schedule), performance (quality tier, perf HUD) and developer tools (simulation panel,
+  test input, redacted log export). Inside the night window, after 10 minutes without interaction, the screen
+  dims to 8% brightness and the orb drops to a 20 fps "ember". A touch or an arriving panel wakes it for 2
+  minutes.
 
 ## Repository layout
 
@@ -84,6 +90,10 @@ Each command logs one JSON line to logcat tag `JARVIS_SIM`. Most commands only w
 `fault --es kind offline|revoke|send_fail|admit_timeout|session_dead`, `preset`, `stop`, `pause`, `reload`,
 `list`, `hangup`, `pairflow`. Read-only `diag`, `perfhud` and `export_logs` work in both modes (`export_logs` writes a redacted
 `jarvis-logs-<ts>.zip` with logcat, diag and about into the app's external `files/export/`, keeping the last 5).
+Settings and night (both modes): `settings --es value open|close`, `night --es value on|off|auto` (force or return
+to the schedule), `config` (prints the settings), `config_set --es key <k> --es value <v>` with keys `standby_s`,
+`think_s`, `panel_ttl_s` (0 = sticky), `max_panels`, `clock24h`, `night_enabled`, `night_start`/`night_end` (HH:MM),
+`quality` (auto|a|b|c), `mic_gain_db`.
 Real-mode pairing helpers: `export_identity`, `import_pairing`, `provision_token`, `unpair`, `pair_selftest`
 (a headless loopback of the SDK setup protocol), and `ble_smoke`.
 
@@ -100,6 +110,11 @@ frames sent and received, end reason).
 
 Launch extras: `am start -n dev.timlock.jarvis/.MainActivity --es jarvis.mode sim|real [--es jarvis.scenario <id>]`.
 `dev/sim.sh` and `dev/scenarios.sh` (run every scenario unattended and summarize its assertions) build on this.
+
+Performance: the renderer logs one line per second to `JARVIS_PERF`: `fps`, `p50`/`p95` frame time (including the
+wait for a free buffer), `cpuMs`/`cpuP95` (the frame's actual draw work), `waitMs` (the buffer dequeue inside the
+first `glClear`), `gpuMs` (`-1` when `GL_EXT_disjoint_timer_query` is missing), `tier`, `particles` and `thermal`.
+`dev/soak.sh <minutes> [interval_s] [scenario]` samples PSS, CPU, thermal status and these numbers into a CSV.
 
 ## Privacy and secrets
 
