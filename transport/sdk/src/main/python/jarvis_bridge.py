@@ -26,7 +26,7 @@ from musegadget import config
 
 HOST = None
 SDK_COMMIT = "55cbf48"
-APP_VERSION = "0.0.0"
+APP_VERSION = "1.0.0"
 SELFTEST_NAME = "selftest.json"
 
 log = logging.getLogger("jarvis.bridge")

@@ -65,6 +65,9 @@ class OrbRenderer(
     private val sb = StringBuilder(160)
     private val cpuSec = FloatArray(512); private var cpuN = 0
     private val gpuSec = FloatArray(512); private var gpuN = 0
+    private val waitSec = FloatArray(512); private var waitN = 0
+    /** ns spent in the frame's first glClear: the driver dequeues the next buffer there (back-pressure, not work). */
+    private var clearNs = 0L
 
     // H2: GL_EXT_disjoint_timer_query ring (results read 1-3 frames late, never stalls)
     private var hasTimer = false
@@ -250,8 +253,10 @@ class OrbRenderer(
         gpuBegin()
         draw(tier)
         gpuEnd()
-        val cpuMs = (System.nanoTime() - td) / 1e6f
+        val waitMs = clearNs / 1e6f
+        val cpuMs = (System.nanoTime() - td) / 1e6f - waitMs
         if (cpuN < cpuSec.size) cpuSec[cpuN++] = cpuMs
+        if (waitN < waitSec.size) waitSec[waitN++] = waitMs
 
         // ---- perf ----
         val drawMs = (System.nanoTime() - t0) / 1e6f
@@ -272,6 +277,9 @@ class OrbRenderer(
         var p50 = 0f; var p95 = 0f; var cpu = 0f; var gpu = -1f
         if (cpuN > 0) { Arrays.sort(cpuSec, 0, cpuN); cpu = cpuSec[(cpuN - 1) / 2] }
         if (gpuN > 0) { Arrays.sort(gpuSec, 0, gpuN); gpu = gpuSec[(gpuN - 1) / 2] }
+        var wait = 0f; var cpu95 = 0f
+        if (waitN > 0) { Arrays.sort(waitSec, 0, waitN); wait = waitSec[(waitN - 1) / 2] }
+        if (cpuN > 0) cpu95 = cpuSec[((cpuN - 1) * 0.95f).toInt()]
         if (secN > 0) {
             Arrays.sort(sec, 0, secN)
             p50 = sec[(secN - 1) / 2]; p95 = sec[((secN - 1) * 0.95f).toInt()]
@@ -283,12 +291,12 @@ class OrbRenderer(
         sb.setLength(0)
         sb.append("{\"fps\":"); fixed(fpsMeasured); sb.append(",\"p50\":"); fixed(p50)
         sb.append(",\"p95\":"); fixed(p95)
-        sb.append(",\"cpuMs\":"); fixed(cpu)
+        sb.append(",\"cpuMs\":"); fixed(cpu); sb.append(",\"cpuP95\":"); fixed(cpu95); sb.append(",\"waitMs\":"); fixed(wait)
         sb.append(",\"gpuMs\":"); if (gpu < 0f) sb.append("-1") else fixed(gpu)
-         sb.append(",\"tier\":\"").append(tier.name)
+        sb.append(",\"tier\":\"").append(tier.name)
         sb.append("\",\"particles\":").append(parts).append(",\"thermal\":").append(governor.thermalStatus).append('}')
         Log.i("JARVIS_PERF", sb.toString())
-        secN = 0; cpuN = 0; gpuN = 0; secFrames = 0; secStart = nowMs
+        secN = 0; cpuN = 0; gpuN = 0; waitN = 0; secFrames = 0; secStart = nowMs
     }
 
     private fun fixed(v: Float) {
@@ -310,7 +318,9 @@ class OrbRenderer(
 
         GLES30.glViewport(0, 0, w, h)
         GLES30.glClearColor(Palette.Void[0] * g, Palette.Void[1] * g, Palette.Void[2] * g, 1f)
+        val tc = System.nanoTime()
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        clearNs = System.nanoTime() - tc
 
         // vignette (window background), no blending
         GLES30.glDisable(GLES30.GL_BLEND)

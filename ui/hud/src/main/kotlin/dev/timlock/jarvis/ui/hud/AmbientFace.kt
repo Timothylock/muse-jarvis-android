@@ -96,7 +96,10 @@ fun AmbientFace(
         }
 
         // Bottom 64 px caption / PTT bar (y 736-800): the pill is also a PTT target.
-        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(px.dp(64f)), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(px.dp(64f)).graphicsLayer { alpha = dim },
+            contentAlignment = Alignment.Center,
+        ) {
             val hasCaption = caption != null
             val outline = if (latched) JarvisColors.StateListen else JarvisColors.CyanDim
             Box(
