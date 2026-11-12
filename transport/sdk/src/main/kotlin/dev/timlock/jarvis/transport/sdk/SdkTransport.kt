@@ -72,6 +72,10 @@ class SdkTransport(
     private val calls = ConcurrentHashMap<String, SdkCallHandle>()
     private val fallbacks = ConcurrentHashMap<String, CompletableDeferred<FallbackTurn>>()
 
+    /** M7: set by :app before [pair] (the BLE byte pipe and the network check live outside this module). */
+    @Volatile var peripheral: dev.timlock.jarvis.core.transport.BlePeripheral? = null
+    @Volatile var network: dev.timlock.jarvis.core.transport.NetworkStatus? = null
+
     /** Set by [stop]; a transport is single-use, so a start racing a stop must not bring Python up again. */
     @Volatile private var stopped = false
 
