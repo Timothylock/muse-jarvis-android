@@ -427,7 +427,7 @@ class ReducerTest {
 
     @Test fun panelReturningCancelsLayoutReturn() {
         val h = H.sim().send(cmd("display.card", "{\"title\":\"A\",\"id\":\"a\"}")).after(100, Intent.DismissPanel("a"))
-        h.after(500, cmd("display.card", "{\"title\":\"B\",\"id\":\"b\"}"))
+        h.after(500, cmd("display.card", "{\"title\":\"B\",\"id\":\"b\",\"sticky\":true}"))
         h.after(5000)
         assertEquals(OrbLayout.DOCKED, h.s.layout)
         assertNull(h.s.layoutReturnAt)

@@ -22,6 +22,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.timlock.jarvis.core.model.Mode
+import dev.timlock.jarvis.core.model.OrbLayout
 import dev.timlock.jarvis.core.model.OrbState
 import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
@@ -120,10 +121,12 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         orbState = state.orbState,
                         onPttClick = { if (state.orbState == OrbState.UNPAIRED) pairingOpen = true },
                         orb = {},
-                        hasDockedPanels = state.dockCount > 0,
+                        hasPanels = state.panels.panels.isNotEmpty(),
                         overlay = {
                             PanelStackView(
                                 stack = state.panels,
+                                layoutDocked = state.layout == OrbLayout.DOCKED,
+                                layoutSinceMs = state.layoutSinceMs,
                                 speaking = state.orbState == OrbState.SPEAKING,
                                 heightPx = PanelHeights::estimatePx,
                                 onDismiss = { vm.store.dispatch(StoreIntent.DismissPanel(it)) },

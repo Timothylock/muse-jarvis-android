@@ -221,4 +221,36 @@ void main(){
   oC = vec4(vC * s * vA, 1.0);
 }
 """
+
+    /** Leader line: one quad along (uP0, uDir) for uLc px (+uPad), vS = px along, vD = px across. Analytic, no blur. */
+    const val LEAD_VS = VS + NDC + QUAD + """
+uniform vec2 uP0; uniform vec2 uDir; uniform float uLc; uniform float uPad;
+out float vS; out float vD;
+void main(){
+  vec2 q = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+  float s = mix(-uPad, uLc + uPad, q.x); float d = mix(-uPad, uPad, q.y);
+  vS = s; vD = d;
+  gl_Position = ndc(uP0 + uDir * s + vec2(-uDir.y, uDir.x) * d);
+}
+"""
+    const val LEAD_FS = FS + """
+in float vS; in float vD;
+uniform float uLc; uniform float uHalf; uniform float uGlowSig; uniform float uAlpha;
+uniform vec3 uCol; uniform vec3 uHot;
+uniform float uHeadAmt; uniform float uHeadSig; uniform float uPulseS; uniform float uPulseAmt; uniform float uPulseSig;
+out vec4 oC;
+void main(){
+  float d = abs(vD);
+  float core = 1.0 - smoothstep(uHalf - 0.5, uHalf + 0.5, d);
+  float o = max(d - uHalf, 0.0);
+  float g = 0.3 * exp(-(o*o) / (2.0*uGlowSig*uGlowSig));
+  float m = smoothstep(-0.5, 0.5, vS) * (1.0 - smoothstep(uLc - 0.5, uLc + 0.5, vS));
+  vec3 c = uCol * (core + g) * m * uAlpha;
+  float hr = (vS - uLc) * (vS - uLc) + vD * vD;
+  c += uHot * uHeadAmt * exp(-hr / (2.0 * uHeadSig * uHeadSig));
+  float pr = (vS - uPulseS) * (vS - uPulseS) + vD * vD;
+  c += uHot * uPulseAmt * exp(-pr / (2.0 * uPulseSig * uPulseSig));
+  oC = vec4(c, 1.0);
+}
+"""
 }

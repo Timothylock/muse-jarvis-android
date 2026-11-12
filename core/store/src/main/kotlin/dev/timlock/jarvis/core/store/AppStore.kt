@@ -1,8 +1,6 @@
 package dev.timlock.jarvis.core.store
 
-import dev.timlock.jarvis.core.model.LeaderAnchor
 import dev.timlock.jarvis.core.model.Mode
-import dev.timlock.jarvis.core.model.OrbLayout
 import dev.timlock.jarvis.core.model.OrbSnapshot
 import dev.timlock.jarvis.core.model.monoMillis
 import kotlinx.coroutines.CoroutineScope
@@ -59,7 +57,6 @@ class AppStore(
 
 /** Maps store state to the renderer contract. [OrbSnapshot.sinceMs] etc. are tracked in [AppState]. */
 fun toOrbSnapshot(s: AppState): OrbSnapshot = OrbSnapshot(
-    leaders = leadersFor(s),
     state = s.orbState,
     previous = s.orbPrevious,
     sinceMs = s.orbStateSince,
@@ -74,19 +71,3 @@ fun toOrbSnapshot(s: AppState): OrbSnapshot = OrbSnapshot(
     shakeAtMs = s.shakeAtMs,
     night = s.night,
 )
-
-/** GL leader anchors (H4/C9/C15): one per DOCK panel, top first, only while DOCKED. y matches PanelStackView. */
-internal fun leadersFor(s: AppState): List<LeaderAnchor> {
-    if (s.layout != OrbLayout.DOCKED) return emptyList()
-    var top = 64
-    val out = ArrayList<LeaderAnchor>(3)
-    for (p in PanelManager.dockPanels(s.panels.panels).take(PanelManager.MAX_PANELS)) {
-        val h = PanelHeights.estimatePx(p)
-        out += LeaderAnchor(
-            yPx = top + h / 2f, revealStartMs = p.revealStartMs,
-            pulseAtMs = if (p.version > 0) p.updatedAtMs else 0L,
-        )
-        top += h + PanelManager.GAP_PX
-    }
-    return out
-}
