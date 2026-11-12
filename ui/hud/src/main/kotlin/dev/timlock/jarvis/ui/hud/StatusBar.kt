@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -46,6 +47,9 @@ fun StatusBar(
     callSinceMs: Long = 0L,
     stateWord: String = "",
     onEnd: () -> Unit = {},
+    /** §7.7 test input: developer flag on / a test WAV is being injected. Amber chip (never violet). */
+    testInputEnabled: Boolean = false,
+    testInputActive: Boolean = false,
 ) {
     val px = LocalPx.current
     val inCall = callSinceMs != 0L
@@ -70,6 +74,10 @@ fun StatusBar(
         )
         Spacer(Modifier.width(px.dp(24f)))
         if (inCall) Text("CALL " + callClock(callSinceMs), style = base) else Text(time, style = base)
+        if (testInputActive || (testInputEnabled && mode == Mode.REAL)) {
+            Spacer(Modifier.width(px.dp(24f)))
+            TestInputChip(active = testInputActive)
+        }
         Spacer(Modifier.weight(1f))
         if (inCall) {
             Text(stateWord, style = JarvisType.StatusBar.style(JarvisColors.CyanBright))
@@ -99,4 +107,21 @@ private fun callClock(sinceMs: Long): String {
     }
     val secs = ((nowMs - sinceMs) / 1000).coerceAtLeast(0)
     return "%02d:%02d".format(secs / 60, secs % 60)
+}
+
+/** Amber "TEST INPUT" chip: filled-ish and bright while injecting, outline and dim when only enabled (real mode). */
+@Composable
+fun TestInputChip(active: Boolean, modifier: Modifier = Modifier) {
+    val px = LocalPx.current
+    val amber = JarvisColors.WarnAmber
+    val shape = RoundedCornerShape(px.dp(6f))
+    Box(
+        modifier
+            .border(px.dp(1.5f), if (active) amber else amber.copy(alpha = 0.6f), shape)
+            .let { if (active) it.background(amber.copy(alpha = 0.20f), shape) else it }
+            .padding(horizontal = px.dp(12f), vertical = px.dp(3f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("TEST INPUT", style = JarvisType.StatusBar.style(if (active) amber else amber.copy(alpha = 0.7f)))
+    }
 }
