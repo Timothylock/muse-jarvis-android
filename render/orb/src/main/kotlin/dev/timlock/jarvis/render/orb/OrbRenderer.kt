@@ -36,11 +36,12 @@ class OrbRenderer(
 
     // programs
     private var pVig = 0; private var pRing = 0; private var pTick = 0; private var pLine = 0
-    private var pSprite = 0; private var pGrid = 0; private var pLabel = 0; private var pPart = 0
+    private var pLead = 0; private var pSprite = 0; private var pGrid = 0; private var pLabel = 0; private var pPart = 0
     private lateinit var uVig: IntArray
     private lateinit var uRing: IntArray; private lateinit var uTick: IntArray; private lateinit var uLine: IntArray
     private lateinit var uSpr: IntArray; private lateinit var uGrid: IntArray; private lateinit var uLab: IntArray
     private lateinit var uPart: IntArray
+    private lateinit var uLead: IntArray
     private lateinit var sRing: IntArray; private lateinit var sTick: IntArray; private lateinit var sLine: IntArray
     private var vaoRing = 0; private var vaoTick120 = 0; private var vaoTick60 = 0; private var vaoLabels = 0
     private var vaoBrackets = 0; private var vaoParts = 0; private var vaoEmpty = 0
@@ -77,6 +78,7 @@ class OrbRenderer(
         pRing = GlUtil.program(Shaders.RING_VS, Shaders.STROKE_FS)
         pTick = GlUtil.program(Shaders.TICK_VS, Shaders.STROKE_FS)
         pLine = GlUtil.program(Shaders.LINE_VS, Shaders.STROKE_FS)
+        pLead = GlUtil.program(Shaders.LEAD_VS, Shaders.LEAD_FS)
         pSprite = GlUtil.program(Shaders.SPRITE_VS, Shaders.SPRITE_FS)
         pGrid = GlUtil.program(Shaders.SPRITE_VS, Shaders.GRID_FS)
         pLabel = GlUtil.program(Shaders.LABEL_VS, Shaders.LABEL_FS)
@@ -96,6 +98,10 @@ class OrbRenderer(
         uPart = locs(
             pPart, "uRes", "uCenter", "uR", "uOrbit", "uRadOff", "uTime", "uCount", "uDepthLo", "uDepthHi",
             "uBright", "uPull", "uScale", "uTint", "uTeal", "uBrightCol",
+        )
+        uLead = locs(
+            pLead, "uRes", "uP0", "uDir", "uLc", "uPad", "uHalf", "uGlowSig", "uAlpha", "uCol", "uHot",
+            "uHeadAmt", "uHeadSig", "uPulseS", "uPulseAmt", "uPulseSig",
         )
         vaoRing = GlUtil.vao(GlUtil.ringStrip(), 2)
         vaoTick120 = GlUtil.vao(GlUtil.ticks(120), 4)
@@ -179,8 +185,10 @@ class OrbRenderer(
         val sc = scene
         val sn = sc.snap
         val g = sc.gain
-        val R = sc.radius; val s = sc.scale
+        val Rc = sc.radius; val s = sc.scale
+        val R = sc.oRadius // outer group (L0-L3, H); core-group rings use Rc
         val cx = sc.cx; val cy = sc.cy
+        val ocx = sc.ocx; val ocy = sc.ocy
         val lay = sc.layer
 
         GLES30.glViewport(0, 0, w, h)
@@ -204,7 +212,7 @@ class OrbRenderer(
         if (lay[Lyr.GRID] > 0.003f) {
             GLES30.glUseProgram(pGrid)
             GLES30.glUniform2f(uGrid[0], w.toFloat(), h.toFloat())
-            GLES30.glUniform2f(uGrid[1], cx, cy)
+            GLES30.glUniform2f(uGrid[1], ocx, ocy)
             GLES30.glUniform1f(uGrid[2], 1.6f * R)
             GLES30.glUniform1f(uGrid[3], R)
             GLES30.glUniform1f(uGrid[4], deg(sc.rotL0))
@@ -218,6 +226,7 @@ class OrbRenderer(
 
         drawParticles(tier, 0f, 0.5f)
 
+        ctrOuter = true
         // L1 bezel + ticks (+ countdown / crawl dot, sim ring)
         val a1 = lay[Lyr.BEZEL] * g
         if (a1 > 0.003f) {
@@ -242,7 +251,7 @@ class OrbRenderer(
         if (a2 > 0.003f) {
             GLES30.glUseProgram(pLabel)
             GLES30.glUniform2f(uLab[0], w.toFloat(), h.toFloat())
-            GLES30.glUniform2f(uLab[1], cx, cy)
+            GLES30.glUniform2f(uLab[1], ocx, ocy)
             GLES30.glUniform1f(uLab[2], 1.085f * R + 4f * s)
             GLES30.glUniform1f(uLab[3], deg2rad(sc.rotL1))
             GLES30.glUniform2f(uLab[4], 27f * s, 9f * s)
@@ -269,11 +278,12 @@ class OrbRenderer(
             }
         }
 
+        ctrOuter = false
         // L4 data arcs
         val a4 = lay[Lyr.DATA] * g
         if (a4 > 0.003f) {
             tmp4[0] = sc.arc0; tmp4[1] = sc.arc0Len; tmp4[2] = sc.arc1; tmp4[3] = sc.arc1Len
-            ring(0.80f * R, 6f * s * (1f + 0.3f * sc.attention), if (tier.halo(4)) 14f * s else 0f, 0.5f, sc.l4c,
+            ring(0.80f * Rc, 6f * s * (1f + 0.3f * sc.attention), if (tier.halo(4)) 14f * s else 0f, 0.5f, sc.l4c,
                 a4 * sc.l4Alpha, sc.rotL4, 2, tmp4, 0f, 0f, 0.7f)
         }
 
@@ -281,7 +291,7 @@ class OrbRenderer(
         val a5 = lay[Lyr.CROWN] * g
         if (a5 > 0.003f) {
             val sweepOn = tier.sweep
-            ticks(vaoTick60, 60, 0.72f * R, 1f * s, 8f * s, 8f * s, 0f, 1f, Palette.CyanDim, Palette.CyanDim,
+            ticks(vaoTick60, 60, 0.72f * Rc, 1f * s, 8f * s, 8f * s, 0f, 1f, Palette.CyanDim, Palette.CyanDim,
                 Palette.CyanBright, 0.75f * a5, 0.75f * a5, sweepOn, sc.sweepDeg / 6f, 0f, 1f + 0.5f * sc.glint5)
         }
 
@@ -289,14 +299,14 @@ class OrbRenderer(
         val a6 = lay[Lyr.DASH] * g
         if (a6 > 0.003f) {
             for (i in 0..2) tmp3[i] = Palette.TealDeep[i] + (sc.inner[i] - Palette.TealDeep[i]) * 0.4f
-            ring(0.58f * R, 2f * s, if (tier.halo(6)) 5f * s else 0f, 0.3f, tmp3, 0.8f * a6, sc.rotL6, 1, null,
+            ring(0.58f * Rc, 2f * s, if (tier.halo(6)) 5f * s else 0f, 0.3f, tmp3, 0.8f * a6, sc.rotL6, 1, null,
                 deg2rad(7.5f), deg2rad(3.75f), 0f)
         }
 
         // L7 reactive ring + echoes
         val a7 = lay[Lyr.REACT] * g
         if (a7 > 0.003f) {
-            val l7r = sc.cur[P.L7_R] * R
+            val l7r = sc.cur[P.L7_R] * Rc
             ring(l7r, 2.5f * s, if (tier.halo(7)) 12f * s else 0f, 0.55f, sc.inner, 0.9f * a7, sc.rotL7, 0, null, 0f, 0f, 0f, true)
             val now = monoMillis()
             for (i in 0 until 3) {
@@ -305,13 +315,15 @@ class OrbRenderer(
                 val k = (now - st) / OrbScene.ECHO_MS.toFloat()
                 if (k >= 1f) { sc.echoStart[i] = -1L; continue }
                 val e = 1f - (1f - k) * (1f - k)
-                ring((0.46f + 0.49f * e) * R, 2f * s, if (tier.halo(7)) 8f * s else 0f, 0.5f, sc.inner, 0.5f * (1f - k) * a7, 0f, 0, null, 0f, 0f, 0f)
+                ring((0.46f + 0.49f * e) * Rc, 2f * s, if (tier.halo(7)) 8f * s else 0f, 0.5f, sc.inner, 0.5f * (1f - k) * a7, 0f, 0, null, 0f, 0f, 0f)
             }
         }
+        ctrOuter = true
         if (sc.latchedAmt > 0.01f) {
             ring(0.94f * R, 2.5f * s, 8f * s, 0.5f, Palette.Listen, 0.9f * sc.latchedAmt * g, 0f, 0, null, 0f, 0f, 0f)
         }
 
+        ctrOuter = false
         // L8 core
         val a8 = lay[Lyr.CORE] * g
         if (a8 > 0.003f) {
@@ -326,27 +338,28 @@ class OrbRenderer(
             GLES30.glUniform3f(uSpr[5], sc.hot[0], sc.hot[1], sc.hot[2])
             GLES30.glBindVertexArray(vaoEmpty)
             if (tier != Tier.D) {
-                GLES30.glUniform1f(uSpr[2], 0.95f * R)
+                GLES30.glUniform1f(uSpr[2], 0.95f * Rc)
                 GLES30.glUniform1f(uSpr[6], 0f)
                 GLES30.glUniform1f(uSpr[7], 0.16f * sc.coreInt * a8)
                 GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             }
-            GLES30.glUniform1f(uSpr[2], 0.36f * R * cs)
+            GLES30.glUniform1f(uSpr[2], 0.36f * Rc * cs)
             GLES30.glUniform1f(uSpr[6], 1f)
             GLES30.glUniform1f(uSpr[7], 1.5f * sc.coreInt * a8)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
-            ring(0.12f * R * cs, 1.2f * s, 0f, 0f, sc.inner, 0.55f * a8, 0f, 0, null, 0f, 0f, 0f)
-            ring(0.20f * R * cs, 1.2f * s, 0f, 0f, sc.inner, 0.4f * a8, 0f, 0, null, 0f, 0f, 0f)
+            ring(0.12f * Rc * cs, 1.2f * s, 0f, 0f, sc.inner, 0.55f * a8, 0f, 0, null, 0f, 0f, 0f)
+            ring(0.20f * Rc * cs, 1.2f * s, 0f, 0f, sc.inner, 0.4f * a8, 0f, 0, null, 0f, 0f, 0f)
         }
 
         drawParticles(tier, 0.5f, 1.01f)
 
-        // H brackets
+        // H brackets (outer group)
+        ctrOuter = true
         val ah = lay[Lyr.HUD] * g
         if (ah > 0.003f) {
             GLES30.glUseProgram(pLine)
             GLES30.glUniform2f(uLine[0], w.toFloat(), h.toFloat())
-            GLES30.glUniform2f(uLine[1], cx, cy)
+            GLES30.glUniform2f(uLine[1], ocx, ocy)
             GLES30.glUniform1f(uLine[2], R)
             GLES30.glUniform1f(uLine[3], 1.5f * s)
             val c = if (sc.pulse > 0f) Palette.CyanBright else Palette.CyanDim
@@ -356,9 +369,40 @@ class OrbRenderer(
             GLES30.glBindVertexArray(vaoBrackets)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, 48)
         }
+
+        drawLeaders(g)
+    }
+
+    /** GL leader lines to the DOCK panels (H4/C9/C15): one quad draw per leader (head + pulse dots in the same draw). */
+    private fun drawLeaders(g: Float) {
+        val sc = scene
+        if (sc.leaderN == 0) return
+        val s = sc.scale
+        val cm = Palette.CyanMid; val ch = sc.hot
+        GLES30.glUseProgram(pLead)
+        GLES30.glUniform2f(uLead[0], w.toFloat(), h.toFloat())
+        GLES30.glUniform1f(uLead[5], 0.5f * max(s, 1f))
+        GLES30.glUniform1f(uLead[6], 3f * s)
+        GLES30.glUniform3f(uLead[8], cm[0], cm[1], cm[2])
+        GLES30.glUniform3f(uLead[9], ch[0] * g, ch[1] * g, ch[2] * g)
+        GLES30.glUniform1f(uLead[11], 3f * s)
+        GLES30.glUniform1f(uLead[14], 4f * s)
+        GLES30.glUniform1f(uLead[4], 16f * s)
+        GLES30.glBindVertexArray(vaoEmpty)
+        for (i in 0 until sc.leaderN) {
+            GLES30.glUniform2f(uLead[1], sc.ldX0[i], sc.ldY0[i])
+            GLES30.glUniform2f(uLead[2], sc.ldDx[i], sc.ldDy[i])
+            GLES30.glUniform1f(uLead[3], sc.ldLen[i])
+            GLES30.glUniform1f(uLead[7], sc.ldAlpha[i] * g)
+            GLES30.glUniform1f(uLead[10], sc.ldHead[i])
+            GLES30.glUniform1f(uLead[12], sc.ldPulseS[i])
+            GLES30.glUniform1f(uLead[13], sc.ldPulseAmt[i])
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        }
     }
 
     private val tmp4 = FloatArray(4)
+    private var ctrOuter = false
 
     private fun deg(d: Float) = d * (PI.toFloat() / 180f)
     private fun deg2rad(d: Float) = d * (PI.toFloat() / 180f)
@@ -393,7 +437,7 @@ class OrbRenderer(
         val rotRad = deg2rad(rotDeg)
         GLES30.glUseProgram(pRing)
         GLES30.glUniform2f(uRing[0], w.toFloat(), h.toFloat())
-        GLES30.glUniform2f(uRing[1], scene.cx, scene.cy)
+        GLES30.glUniform2f(uRing[1], if (ctrOuter) scene.ocx else scene.cx, if (ctrOuter) scene.ocy else scene.cy)
         GLES30.glUniform1f(uRing[2], radiusPx)
         GLES30.glUniform1f(uRing[3], halfW)
         GLES30.glUniform1f(uRing[4], rotRad)
@@ -416,7 +460,7 @@ class OrbRenderer(
         val halfW = width * 0.5f + 1f
         GLES30.glUseProgram(pTick)
         GLES30.glUniform2f(uTick[0], w.toFloat(), h.toFloat())
-        GLES30.glUniform2f(uTick[1], scene.cx, scene.cy)
+        GLES30.glUniform2f(uTick[1], if (ctrOuter) scene.ocx else scene.cx, if (ctrOuter) scene.ocy else scene.cy)
         GLES30.glUniform1f(uTick[2], radiusPx)
         GLES30.glUniform1f(uTick[3], halfW)
         GLES30.glUniform1f(uTick[4], rotRad)

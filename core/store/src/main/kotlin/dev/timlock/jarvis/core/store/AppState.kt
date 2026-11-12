@@ -72,9 +72,6 @@ data class AppState(
     /** Derived: number of panels in [panels]. */
     val panelCount: Int get() = panels.panels.size
 
-    /** Panels in the dock column (placement DOCK); only these make the layout DOCKED. */
-    val dockCount: Int get() = panels.panels.count { it.placement == dev.timlock.jarvis.core.model.PanelPlacement.DOCK }
-
     val latched: Boolean get() = ptt == PttState.Latched
 
     /** Earliest pending deadline, for scheduling a Tick. */

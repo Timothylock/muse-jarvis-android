@@ -28,8 +28,8 @@ fun AmbientFace(
     modifier: Modifier = Modifier,
     /** Fills the whole screen behind the HUD (the GL orb); the default is the static preview orb. */
     orb: @Composable () -> Unit = { DefaultAmbientOrb() },
-    /** True when DOCK panels exist: the docked orb would overlap the big clock, so it is hidden. Chips coexist with the clock. */
-    hasDockedPanels: Boolean = false,
+    /** True when panels are visible: the docked orb would overlap the big clock, so it is hidden. */
+    hasPanels: Boolean = false,
     /** Drawn over the face (above the status bar and clock), e.g. the panel stack. */
     overlay: @Composable () -> Unit = {},
 ) {
@@ -39,7 +39,7 @@ fun AmbientFace(
         orb()
         StatusBar(mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart))
 
-        if (!hasDockedPanels) {
+        if (!hasPanels) {
             // Clock: top-left of the content area (content starts at y=48).
             Text(
                 now.timeText(),
