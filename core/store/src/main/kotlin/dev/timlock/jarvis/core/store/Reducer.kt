@@ -304,7 +304,6 @@ private class Ctx(var s: AppState, val now: Long) {
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
             is Intent.SetNight -> s = s.copy(night = input.night)
             is Intent.SetPerfHud -> s = s.copy(perfHud = input.on)
-            is Intent.SetTestInput -> s = s.copy(testInputEnabled = input.enabled, testInputActive = input.active)
             is Intent.FallbackResult -> fallbackResult(input)
             is Event -> event(input.event)
         }

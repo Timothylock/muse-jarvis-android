@@ -45,8 +45,6 @@ fun AmbientFace(
     onPttDown: () -> Unit = {},
     onPttUp: () -> Unit = {},
     onHangUp: () -> Unit = {},
-    testInputEnabled: Boolean = false,
-    testInputActive: Boolean = false,
 ) {
     val px = LocalPx.current
     val now by rememberNow()
@@ -69,7 +67,6 @@ fun AmbientFace(
         StatusBar(
             mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart), onSimChipClick,
             callSinceMs = callSinceMs, stateWord = orbState.name, onEnd = onHangUp,
-            testInputEnabled = testInputEnabled, testInputActive = testInputActive,
         )
 
         if (!hasDockedPanels) {

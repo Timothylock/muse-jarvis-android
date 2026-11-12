@@ -471,17 +471,4 @@ class ReducerTest {
         assertEquals(STANDBY, h.orb)
         assertEquals(2, h.s.advisoryErrors)
     }
-
-    @Test fun setTestInputOnlySetsFlags() {
-        val h = H.sim()
-        val before = h.s
-        assertFalse(before.testInputEnabled || before.testInputActive)
-        h.send(Intent.SetTestInput(enabled = true, active = true))
-        assertTrue(h.s.testInputEnabled && h.s.testInputActive)
-        assertTrue(h.fx.isEmpty())
-        assertEquals(before.copy(testInputEnabled = true, testInputActive = true), h.s)
-        h.send(Intent.SetTestInput(enabled = true, active = false))
-        assertTrue(h.s.testInputEnabled)
-        assertFalse(h.s.testInputActive)
-    }
 }

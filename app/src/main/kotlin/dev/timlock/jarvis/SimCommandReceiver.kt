@@ -28,20 +28,14 @@ import org.json.JSONObject
 
 /**
  * ADB control surface (§7.7): `adb shell am broadcast -a dev.timlock.jarvis.SIM --es cmd <cmd> [--es value <v>]`.
- * Protected by the DUMP permission (held by the ADB shell). Everything but `diag`, `perfhud` and the test hooks
- * requires mode == SIM. Each command logs exactly one single-line JSON result to tag JARVIS_SIM.
- *
- * Commands: sim (SIM only) state, ptt, scenario, stop, pause, fault, repair, reload, list, hangup, pairflow, display, preset;
- * any mode: diag (adds testInput/call/lastCall), perfhud;
- * real-pairing (REAL only): import_pairing, export_identity, provision_token, unpair, pair_selftest, ble_smoke;
- * test hooks (REAL needs dev_setting test_input on + link online; SIM always allowed; results never carry server text):
- * inject_wav, make_wav, list_wav, dev_setting (test_input | test_thread_id).
+ * Protected by the DUMP permission (held by the ADB shell). Everything but `diag` requires mode == SIM.
+ * Each command logs exactly one single-line JSON result to tag JARVIS_SIM.
  */
 class SimCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val cmd = intent.getStringExtra("cmd") ?: ""
         val value = intent.getStringExtra("value")
-        if (cmd == "display" || cmd == "preset" || cmd in REAL_ASYNC_CMDS || cmd in TEST_CMDS) {
+        if (cmd == "display" || cmd == "preset" || cmd in REAL_ASYNC_CMDS) {
             handleAsync(context.applicationContext, cmd, intent)
             return
         }
@@ -59,14 +53,12 @@ class SimCommandReceiver : BroadcastReceiver() {
         // ble_smoke holds the radio for many seconds: release the broadcast first (10 s limit); the result is logged later.
         var finished = false
         fun finishOnce() { if (!finished) { finished = true; pending.finish() } }
-        // inject_wav / make_wav can run for a minute: release the broadcast first, the single result line comes later.
-        if (cmd == "ble_smoke" || cmd == "inject_wav" || cmd == "make_wav") finishOnce()
+        if (cmd == "ble_smoke") finishOnce()
         CoroutineScope(Dispatchers.Default).launch {
             val result = try {
                 when (cmd) {
                     "display" -> displayResult(intent)
                     "preset" -> presetResult(intent)
-                    in TEST_CMDS -> testResult(cmd, intent)
                     else -> realResult(context, cmd, intent)
                 }
             } catch (t: Throwable) {
@@ -74,47 +66,6 @@ class SimCommandReceiver : BroadcastReceiver() {
             }
             Log.i("JARVIS_SIM", result.toString())
             finishOnce()
-        }
-    }
-
-    /**
-     * §7.7 test hooks, allowed in REAL and SIM (inject_wav enforces its own real-mode preconditions):
-     * `inject_wav --es name n [--es thread_id id] [--ez hangup false] [--el timeout_ms 90000]`,
-     * `make_wav --es name n --es text "..." [--ez label false]`, `list_wav`,
-     * `dev_setting --es key test_input --ez on true|false` / `--es key test_thread_id --es value <id|empty>`.
-     */
-    private suspend fun testResult(cmd: String, intent: Intent): JSONObject {
-        val ti = AppGraph.testInput
-        return when (cmd) {
-            "inject_wav" -> ti.inject(
-                intent.getStringExtra("name")?.trim().orEmpty(),
-                intent.getStringExtra("thread_id")?.trim()?.takeIf { it.isNotEmpty() },
-                intent.getBooleanExtra("hangup", true),
-                (if (intent.hasExtra("timeout_ms")) intent.getLongExtra("timeout_ms", 90_000L) else 90_000L).coerceIn(5_000L, 300_000L),
-            )
-            "make_wav" -> ti.makeWav(
-                intent.getStringExtra("name")?.trim().orEmpty(),
-                intent.getStringExtra("text").orEmpty(),
-                intent.getBooleanExtra("label", true),
-            )
-            "list_wav" -> ti.list()
-            "dev_setting" -> when (intent.getStringExtra("key")) {
-                "test_input" -> {
-                    if (!intent.hasExtra("on")) return fail(cmd, "missing --ez on")
-                    val on = intent.getBooleanExtra("on", false)
-                    AppGraph.devSettings.setTestInputEnabled(on)
-                    val s = AppGraph.store.state.value
-                    AppGraph.store.dispatch(StoreIntent.SetTestInput(on, s.testInputActive))
-                    JSONObject().put("cmd", cmd).put("ok", true).put("key", "test_input").put("value", on)
-                }
-                "test_thread_id" -> {
-                    val v = intent.getStringExtra("value")?.trim().orEmpty()
-                    AppGraph.devSettings.setTestThreadId(v)
-                    JSONObject().put("cmd", cmd).put("ok", true).put("key", "test_thread_id").put("set", v.isNotEmpty())
-                }
-                else -> fail(cmd, "key must be test_input|test_thread_id")
-            }
-            else -> fail(cmd, "unknown cmd")
         }
     }
 
@@ -330,7 +281,6 @@ class SimCommandReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        val TEST_CMDS = setOf("inject_wav", "make_wav", "list_wav", "dev_setting")
         val REAL_ASYNC_CMDS = setOf("import_pairing", "export_identity", "provision_token", "unpair", "pair_selftest", "ble_smoke")
         val SIM_CMDS = setOf("state", "ptt", "scenario", "stop", "pause", "fault", "repair", "reload", "list", "hangup", "pairflow")
         /** Fake, format-valid token for sim pairing screenshots only (sim never stores or sends it). */
@@ -374,9 +324,6 @@ class SimCommandReceiver : BroadcastReceiver() {
             is dev.timlock.jarvis.core.store.PttState.Latched -> "latched"
         })
         .put("perfHud", s.perfHud)
-        .put("testInput", JSONObject().put("enabled", s.testInputEnabled).put("active", s.testInputActive))
-        .put("call", AppGraph.calls.current?.toJson() ?: JSONObject.NULL)
-        .put("lastCall", AppGraph.calls.last?.toJson() ?: JSONObject.NULL)
         .put("scenario", if (s.mode == Mode.SIM) {
             val r = AppGraph.simController.run.value
             JSONObject().put("id", r.id ?: JSONObject.NULL).put("step", r.step).put("total", r.total)

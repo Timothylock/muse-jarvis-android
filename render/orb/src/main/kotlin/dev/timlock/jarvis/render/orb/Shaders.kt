@@ -4,26 +4,42 @@ package dev.timlock.jarvis.render.orb
 internal object Shaders {
     private const val VS = "#version 300 es\nprecision highp float;\n"
     private const val FS = "#version 300 es\nprecision highp float;\nprecision highp int;\n"
+    /** H16/C16: mediump fragment stage where the maths is range-safe (Rogue runs FP16 ALU at 2x rate). */
+    private const val FSM = "#version 300 es\nprecision mediump float;\nprecision highp int;\n"
     private const val NDC = "uniform vec2 uRes;\nvec4 ndc(vec2 p){return vec4(p.x/uRes.x*2.0-1.0,1.0-p.y/uRes.y*2.0,0.0,1.0);}\n"
     private const val TAU = "const float TAU=6.2831853;\n"
 
-    /** Full ring / arc / dash strip. aTV = (theta, v). One shared VBO for every ring. */
+    /**
+     * Full ring / arc / dash strip, instanced (C1). aTV = (theta, v) from the shared strip; one instance per ring.
+     * Instance block (6 x vec4): I0 (radius, halfW, stroke half-width, glow), I1 (sigma, rot, cap, mode),
+     * I2 (arc0 start, len0, arc1 start, len1  |  mode 1: period, len), I3 (reveal active, value, head, mask),
+     * I4 (rgb, alpha), I5 (centre x px, centre y px, displacement on, unused). The L7 displacement array stays a uniform.
+     */
     const val RING_VS = VS + NDC + TAU + """
 layout(location=0) in vec2 aTV;
-uniform vec2 uCenter; uniform float uRadius; uniform float uHalfW; uniform float uRot;
-uniform float uDisp[32]; uniform float uDispOn; uniform vec3 uColor; uniform float uAlpha;
-out float vV; out float vAng; out vec3 vCol; out float vA;
+layout(location=1) in vec4 aI0; layout(location=2) in vec4 aI1; layout(location=3) in vec4 aI2;
+layout(location=4) in vec4 aI3; layout(location=5) in vec4 aI4; layout(location=6) in vec4 aI5;
+uniform float uDisp[32];
+out float vV; out float vAng;
+flat out vec3 vCol; flat out float vA;
+flat out float fHalfW; flat out float fStroke; flat out float fGlow; flat out float fSigma;
+flat out float fRot; flat out float fSoft; flat out float fCap; flat out float fRadPx;
+flat out int fMode; flat out vec4 fArcs; flat out vec4 fRev;
 void main(){
-  float rad = uRadius;
-  if (uDispOn > 0.5) {
-    float f = (aTV.x - uRot) / TAU; f = (f - floor(f)) * 32.0;
+  float rad = aI0.x;
+  float rot = aI1.y;
+  if (aI5.z > 0.5) {
+    float f = (aTV.x - rot) / TAU; f = (f - floor(f)) * 32.0;
     int i0 = int(f); float t = f - float(i0); t = t*t*(3.0-2.0*t);
     rad += mix(uDisp[i0], uDisp[(i0+1)&31], t);
   }
-  rad += aTV.y * uHalfW;
-  vec2 p = uCenter + rad * vec2(sin(aTV.x), -cos(aTV.x));
+  rad += aTV.y * aI0.y;
+  vec2 p = aI5.xy + rad * vec2(sin(aTV.x), -cos(aTV.x));
   gl_Position = ndc(p);
-  vV = aTV.y; vAng = aTV.x; vCol = uColor; vA = uAlpha;
+  vV = aTV.y; vAng = aTV.x; vCol = aI4.xyz; vA = aI4.w;
+  fHalfW = aI0.y; fStroke = aI0.z; fGlow = aI0.w; fSigma = aI1.x;
+  fRot = rot; fSoft = 1.3 / max(aI0.x, 1.0); fCap = aI1.z; fRadPx = aI0.x;
+  fMode = int(aI1.w + 0.5); fArcs = aI2; fRev = aI3;
 }
 """
 
@@ -86,14 +102,7 @@ void main(){
 }
 """
 
-    /** Shared by ring, tick and line programs: solid core + exp glow, optional angular masks. */
-    const val STROKE_FS = FS + TAU + """
-in float vV; in float vAng; in vec3 vCol; in float vA;
-uniform float uHalfW; uniform float uStroke; uniform float uGlow; uniform float uSigma;
-uniform float uRot; uniform float uSoft; uniform float uCap; uniform float uRadPx;
-uniform int uMode; uniform vec4 uArcs; uniform vec2 uPer;
-uniform vec4 uRev;    // x active, y reveal 0..1, z head amount, w mask on (0 = head pass only)
-uniform vec3 uRevHot;
+    private const val STROKE_BODY = """
 out vec4 oC;
 float arcM(float a, float st, float len, float per, out float cap){
   float q = mod(a - st, per);
@@ -135,6 +144,37 @@ void main(){
 }
 """
 
+    /** Shared by tick and line programs: solid core + exp glow, optional angular masks (uniform-driven). */
+    const val STROKE_FS = FS + TAU + """
+in float vV; in float vAng; in vec3 vCol; in float vA;
+uniform float uHalfW; uniform float uStroke; uniform float uGlow; uniform float uSigma;
+uniform float uRot; uniform float uSoft; uniform float uCap; uniform float uRadPx;
+uniform int uMode; uniform vec4 uArcs; uniform vec2 uPer;
+uniform vec4 uRev;    // x active, y reveal 0..1, z head amount, w mask on (0 = head pass only)
+uniform vec3 uRevHot;
+""" + STROKE_BODY
+
+    /** Same shading as [STROKE_FS] but every per-ring parameter arrives flat from the instance block (C1). */
+    const val RING_FS = FS + TAU + """
+in float vV; in float vAng; flat in vec3 vCol; flat in float vA;
+flat in float fHalfW; flat in float fStroke; flat in float fGlow; flat in float fSigma;
+flat in float fRot; flat in float fSoft; flat in float fCap; flat in float fRadPx;
+flat in int fMode; flat in vec4 fArcs; flat in vec4 fRev;
+uniform vec3 uRevHot;
+#define uHalfW fHalfW
+#define uStroke fStroke
+#define uGlow fGlow
+#define uSigma fSigma
+#define uRot fRot
+#define uSoft fSoft
+#define uCap fCap
+#define uRadPx fRadPx
+#define uMode fMode
+#define uArcs fArcs
+#define uPer fArcs.xy
+#define uRev fRev
+""" + STROKE_BODY
+
     /** Quad from gl_VertexID (triangle strip, 4 verts); used for vignette, grid and core sprites. */
     private const val QUAD = "vec2 quad(){return vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1)) * 2.0 - 1.0;}\n"
 
@@ -158,23 +198,23 @@ uniform vec2 uCenter; uniform float uHalf;
 out vec2 vUv; out vec2 vP;
 void main(){ vec2 q = quad(); vUv = q * 0.5 + 0.5; vP = q; gl_Position = ndc(uCenter + q * uHalf); }
 """
-    const val SPRITE_FS = FS + """
+    const val SPRITE_FS = FSM + """
 in vec2 vUv; uniform sampler2D uTex; uniform vec3 uTint; uniform vec3 uHot; uniform float uHotMix; uniform float uInt;
 out vec4 oC;
 void main(){
   float s = texture(uTex, vUv).r;
-  vec3 c = mix(uTint, uHot, smoothstep(0.35, 0.95, s) * uHotMix);
+  vec3 c = mix(uTint, uHot, smoothstep(0.6, 1.0, s) * uHotMix);
   oC = vec4(c * s * uInt, 1.0);
 }
 """
 
     const val GRID_FS = FS + TAU + """
 in vec2 vP; uniform float uR; uniform float uRot; uniform vec3 uCol; uniform float uA;
-uniform float uRadar; uniform float uRadarAng; uniform float uExp;
+uniform float uRadar; uniform float uRadarAng; uniform float uExp; uniform float uK;
 out vec4 oC;
 void main(){
-  float r = length(vP) * 1.6;
-  if (r > 1.6) discard;
+  float r = length(vP) * uK;
+  if (r > uK) discard;
   float px = 1.0 / uR;
   float fr = r / 0.2; float k = floor(fr + 0.5);
   float dr = abs(fr - k) * 0.2;
@@ -184,13 +224,13 @@ void main(){
   float da = abs(mod(th - uRot + seg * 0.5, seg) - seg * 0.5);
   float rad = clamp(1.5 - da * r * uR, 0.0, 1.0) * smoothstep(0.08, 0.25, r);
   float lines = max(ring, rad * 0.8);
-  float fade = 1.0 - smoothstep(1.3, 1.6, r);
+  float fade = 1.0 - smoothstep(uK - 0.3, uK, r);
   float v = lines * fade;
   if (uRadar > 0.0) {
     float behind = mod(uRadarAng - th, TAU);
-    float wedge = exp(-behind * 2.2) * step(behind, 3.0) * (1.0 - r / 1.6);
+    float wedge = exp(-behind * 2.2) * step(behind, 3.0) * (1.0 - r / uK);
     float edge = exp(-behind * behind * 400.0) * 1.2;
-    v += uRadar * (lines * (wedge * 2.5) + (wedge * 0.22 + edge * 0.5 * (1.0 - r / 1.6)));
+    v += uRadar * (lines * (wedge * 2.5) + (wedge * 0.22 + edge * 0.5 * (1.0 - r / uK)));
   }
   v *= 1.0 - smoothstep(uExp - 0.12, uExp, r);
   oC = vec4(uCol * v * uA, 1.0);
@@ -201,22 +241,24 @@ void main(){
     const val LABEL_VS = VS + NDC + """
 layout(location=0) in vec4 aA;
 uniform vec2 uCenter; uniform float uRadius; uniform float uRot; uniform vec2 uHalfSize;
-out vec2 vUv;
+out vec2 vUv; out float vF;
 void main(){
   float th = aA.x + uRot;
   vec2 dir = vec2(sin(th), -cos(th)); vec2 tg = vec2(cos(th), sin(th));
   float lx = aA.y * uHalfSize.x; float ly = (aA.z - 0.5) * 2.0 * uHalfSize.y;
   if (dir.y > 0.0) { lx = -lx; ly = -ly; }
+  // H15: the upright flip happens at +-90 deg; fade each label out around that line so the flip is never seen
+  vF = smoothstep(0.0175, 0.0698, abs(cos(th)));
   vec2 p = uCenter + dir * uRadius + tg * lx + dir * ly;
   gl_Position = ndc(p);
   float col = mod(aA.w, 4.0); float row = floor(aA.w / 4.0);
   vUv = vec2((col + aA.y * 0.5 + 0.5) / 4.0, (row + (1.0 - aA.z)) / 3.0);
 }
 """
-    const val LABEL_FS = FS + """
-in vec2 vUv; uniform sampler2D uTex; uniform vec3 uColor; uniform float uAlpha;
+    const val LABEL_FS = FSM + """
+in vec2 vUv; in float vF; uniform sampler2D uTex; uniform vec3 uColor; uniform float uAlpha;
 out vec4 oC;
-void main(){ float a = texture(uTex, vUv).a; oC = vec4(uColor * a * uAlpha, 1.0); }
+void main(){ float a = texture(uTex, vUv).a; oC = vec4(uColor * a * uAlpha * vF, 1.0); }
 """
 
     /**
@@ -230,8 +272,10 @@ uniform float uCount; uniform float uDepthLo; uniform float uDepthHi; uniform fl
 uniform float uScale; uniform vec3 uTint; uniform vec3 uTeal; uniform vec3 uBrightCol;
 uniform float uBurstBase; uniform float uBurstBr; uniform vec3 uHotCol;
 uniform float uBurst[6]; uniform float uBurstS[6];
-out vec3 vC; out float vA;
-void hide(){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; vC = vec3(0.0); }
+uniform vec2 uDrift;                          // C12: Lissajous drift of the orb centre (px)
+uniform float uCometIdx[4]; uniform float uCometOff[4]; uniform vec2 uComet; // C7(c): streamer slots, extra orbit, (active slot, boost)
+out vec3 vC; out float vA; out float vK;
+void hide(){ gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; vA = 0.0; vC = vec3(0.0); vK = 3.0; }
 void main(){
   if (float(gl_VertexID) >= uBurstBase) {
     int b = int((float(gl_VertexID) - uBurstBase) / 16.0);
@@ -245,6 +289,7 @@ void main(){
     vec2 p = uCenter + r * uR * vec2(sin(ang), -cos(ang));
     gl_Position = ndc(p);
     gl_PointSize = aB.x * uScale * 0.7 + 1.5;
+    vK = 3.0;
     vC = mix(uHotCol, uTeal, k);
     vA = (1.0 - k) * uBurstS[b] * uBurstBr;
     return;
@@ -257,21 +302,29 @@ void main(){
   float ef = smoothstep(0.0, 0.09, r - lo) * smoothstep(0.0, 0.09, hi - r);
   r = lo + (r - lo) * uPull;
   r += 0.018 * sin(uTime * (0.5 + aA.x) + aA.x * 40.0);
-  float ang = aA.z + aA.w * uOrbit * 0.0174533;
-  vec2 p = uCenter + r * uR * vec2(sin(ang), -cos(ang));
-  float a = uBright * (0.35 + 0.65 * depth) * (1.0 + aB.z) * ef * cf * vis;
+  float orb = uOrbit; float cb = 0.0;
+  for (int k = 0; k < 4; k++) {
+    if (float(gl_VertexID) == uCometIdx[k]) { orb += uCometOff[k]; cb = (float(k) == uComet.x) ? uComet.y : 0.0; }
+  }
+  float ang = aA.z + aA.w * orb * 0.0174533;
+  // C12: back particles lag the orb's drift, front ones lead it (parallax, <= ~10 px)
+  vec2 p = uCenter + uDrift * ((depth - 0.5) * 1.6) + r * uR * vec2(sin(ang), -cos(ang));
+  float mote = step(0.9, aA.x);   // 10% soft 2.5x motes at 0.4 brightness
+  float tw = 0.8 + 0.2 * sin(uTime * (1.5 + 3.0 * aA.x) + 50.0 * aA.x);
+  float a = uBright * (0.35 + 0.65 * depth) * (1.0 + aB.z) * ef * cf * vis * tw * mix(1.0, 0.4, mote) * (1.0 + 2.0 * cb);
   if (a < 0.002) { hide(); return; }
   gl_Position = ndc(p);
-  gl_PointSize = aB.x * uScale * (0.75 + 0.5 * depth) + 1.5;
+  gl_PointSize = aB.x * uScale * (0.75 + 0.5 * depth) * mix(1.0, 2.5, mote) + 1.5;
+  vK = mix(3.0, 1.3, mote);
   vC = mix(mix(uTeal, uBrightCol, depth), uTint, 0.5);
   vA = a;
 }
 """
-    const val PART_FS = FS + """
-in vec3 vC; in float vA; out vec4 oC;
+    const val PART_FS = FSM + """
+in vec3 vC; in float vA; in float vK; out vec4 oC;
 void main(){
   float d = length(gl_PointCoord - 0.5) * 2.0;
-  float s = exp(-d * d * 3.0) * (1.0 - smoothstep(0.75, 1.0, d));
+  float s = exp(-d * d * vK) * (1.0 - smoothstep(0.75, 1.0, d));
   oC = vec4(vC * s * vA, 1.0);
 }
 """

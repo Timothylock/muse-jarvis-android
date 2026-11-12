@@ -20,7 +20,6 @@ import dev.timlock.jarvis.core.store.AppStore
 import dev.timlock.jarvis.core.store.EarconKind
 import dev.timlock.jarvis.core.store.Effect
 import dev.timlock.jarvis.core.store.HapticKind
-import dev.timlock.jarvis.core.store.Intent
 import dev.timlock.jarvis.core.transport.GadgetTransport
 import dev.timlock.jarvis.core.store.toOrbSnapshot
 import dev.timlock.jarvis.core.model.PerfHudData
@@ -55,12 +54,7 @@ object AppGraph {
     val audioBus = AudioVisualBus()
 
     private val levels = SyntheticLevels(audioBus)
-    lateinit var calls: CallController
-        private set
-    lateinit var devSettings: DevSettings
-        private set
-    lateinit var testInput: TestInputController
-        private set
+    private lateinit var calls: CallController
     private lateinit var mic: MicSource
     private lateinit var earcons: Earcons
 
@@ -129,14 +123,6 @@ object AppGraph {
         mic = MicSource(app, audioBus) { _needsMicPermission.value = true }
         earcons = Earcons(app)
         calls = CallController(scope, { transport }, mic, Player(audioBus)) { store.dispatch(it) }
-        devSettings = DevSettings(app)
-        testInput = TestInputController(app, store, mic, calls, devSettings)
-        // §7.7: persisted developer flag -> store (keeps the injector's `active` flag as is).
-        scope.launch {
-            devSettings.testInputEnabledFlow.collect { on ->
-                store.dispatch(Intent.SetTestInput(on, store.state.value.testInputActive))
-            }
-        }
         simController = SimController(context.applicationContext, store, scope) { transport as? SimTransport }
         simController.start()
         // Orb snapshot for the GL thread on every state change.
