@@ -15,10 +15,16 @@ private const val TAG = "JARVIS_STORE"
 
 /**
  * Speaker (DESIGN §4.3 step 6, §6.4). write() enqueues into a 5 s ring and never blocks; the `audio-out` thread
- * feeds a streaming 24 kHz mono AudioTrack (USAGE_ASSISTANT / SPEECH, ~120 ms buffer) with non-blocking writes,
+ * feeds a streaming 24 kHz mono AudioTrack (USAGE_ASSISTANT / SPEECH, ~240 ms buffer) with non-blocking writes,
  * analyzing each chunk with a [LevelAnalyzer] and storing the level frames keyed by sample position. Each tick
  * the frame under the playback head (AudioTrack.getTimestamp; fallback: write position - estimated latency) is
  * published to `bus.out`, so visuals line up with the sound (Q3). flush() = pause()+flush()+play() and drops the ring.
+ *
+ * Jitter cushion (2026-11-12): the realtime voice feed is paced in 40 ms frames by the SDK's play loop, so any
+ * scheduling hiccup on the way (Python loop, JNI) arrives as a feed gap. Playing each frame the moment it lands
+ * turned those gaps into stutter, and the delays accumulated into slow speech. The out thread therefore holds an
+ * utterance until the ring carries PREBUFFER_MS of cushion (or the feed has been quiet for FEED_QUIET_MS, the
+ * short-utterance case), and re-cushions to REBUFFER_MS whenever the ring runs dry mid-utterance.
  *
  * onFirstAudible fires when the head passes the first sample of an utterance (after idle); onDrained when the
  * head reaches the last written sample. Callbacks run on the audio-out thread.
@@ -39,6 +45,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
     // out-thread state (guarded by lock where shared with flush())
     private var track: AudioTrack? = null
     private var lastAcceptNs = 0L
+    @Volatile private var lastWriteNs = 0L   // last write() arrival; drives the jitter-cushion quiet check
     private var accepted = 0L            // samples accepted by the track since the last flush
     private var latencyFrames = LATENCY_FRAMES
     private val analyzer = LevelAnalyzer(RATE)
@@ -61,6 +68,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
 
     override fun write(pcm: ShortArray) {
         if (pcm.isEmpty()) return
+        lastWriteNs = System.nanoTime()
         synchronized(lock) {
             if (released) return
             var n = pcm.size
@@ -110,7 +118,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
 
     private fun createTrack(): AudioTrack? = try {
         val minBytes = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val target = LATENCY_FRAMES * 2
+        val target = TRACK_BUFFER_FRAMES * 2
         val t = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -144,19 +152,26 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
         var chunkEpoch = 0
         try {
             while (true) {
-                // 1) take a chunk if none pending
+                // 1) take a chunk if none pending (subject to the jitter cushion)
+                var deferred = false
                 synchronized(lock) {
                     if (released) return
                     if (chunkLen > 0 && chunkEpoch != epoch) { chunkLen = 0; chunkOff = 0 } // flushed while pending
                     if (chunkLen == 0 && rCount > 0) {
-                        val n = minOf(CHUNK, rCount)
-                        var r = rHead
-                        for (i in 0 until n) { chunk[i] = ring[r]; r = if (r + 1 == RING_SAMPLES) 0 else r + 1 }
-                        rHead = r; rCount -= n
-                        chunkLen = n; chunkOff = 0; chunkEpoch = epoch
-                        analyzer.process(chunk, 0, n)
-                        levels.append(accepted, n, analyzer)
-                        if (utter == Utter.IDLE) { utter = Utter.PENDING; firstPos = accepted; decayActive = false }
+                        val quietMs = (System.nanoTime() - lastWriteNs) / 1_000_000L
+                        val need = if (utter == Utter.IDLE) PREBUFFER_SAMPLES else REBUFFER_SAMPLES
+                        if (rCount < need && quietMs < FEED_QUIET_MS) {
+                            deferred = true // cushion still building; leave the audio in the ring
+                        } else {
+                            val n = minOf(CHUNK, rCount)
+                            var r = rHead
+                            for (i in 0 until n) { chunk[i] = ring[r]; r = if (r + 1 == RING_SAMPLES) 0 else r + 1 }
+                            rHead = r; rCount -= n
+                            chunkLen = n; chunkOff = 0; chunkEpoch = epoch
+                            analyzer.process(chunk, 0, n)
+                            levels.append(accepted, n, analyzer)
+                            if (utter == Utter.IDLE) { utter = Utter.PENDING; firstPos = accepted; decayActive = false }
+                        }
                     }
                 }
                 // 2) hand it to the track (non-blocking)
@@ -186,10 +201,13 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
                 // 4) wait
                 synchronized(lock) {
                     if (released) return
-                    val busy = chunkLen > 0 || rCount > 0 || utter != Utter.IDLE || decayActive
-                    if (!busy) lock.wait()
-                    else if (chunkLen == 0 && rCount > 0) Unit
-                    else lock.wait(if (chunkLen > 0 && wrote == 0) 5L else TICK_MS)
+                    if (deferred) { lock.wait(TICK_MS) }
+                    else {
+                        val busy = chunkLen > 0 || rCount > 0 || utter != Utter.IDLE || decayActive
+                        if (!busy) lock.wait()
+                        else if (chunkLen == 0 && rCount > 0) Unit
+                        else lock.wait(if (chunkLen > 0 && wrote == 0) 5L else TICK_MS)
+                    }
                 }
             }
         } finally {
@@ -278,5 +296,12 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
         private const val CHUNK = 480
         private const val TICK_MS = 10L
         private const val LATENCY_FRAMES = RATE * 120 / 1000
+        private const val TRACK_BUFFER_FRAMES = RATE * 240 / 1000
+        /** Cushion held before an utterance starts (jitter absorption for the realtime-paced feed). */
+        private const val PREBUFFER_SAMPLES = RATE * 800 / 1000
+        /** Smaller cushion required to resume after a mid-utterance dry spell. */
+        private const val REBUFFER_SAMPLES = RATE * 300 / 1000
+        /** Feed quiet for this long = utterance is shorter than the cushion; start with what we have. */
+        private const val FEED_QUIET_MS = 150L
     }
 }
