@@ -213,6 +213,10 @@ private fun TitleRow(panel: Panel, compact: Boolean) {
             Spacer(Modifier.width(px.dp(12f)))
             PinGlyph()
         }
+        if (panel.textReply) {
+            Spacer(Modifier.width(px.dp(12f)))
+            Text("TEXT REPLY", style = JarvisType.StatusBar.style(JarvisColors.TextMuted))
+        }
         if (panel.sim) {
             Spacer(Modifier.width(px.dp(12f)))
             SimBadge()
