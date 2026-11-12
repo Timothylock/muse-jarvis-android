@@ -15,7 +15,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.padding
+import dev.timlock.jarvis.ui.hud.LocalPx
+import dev.timlock.jarvis.ui.hud.PerfHud
+import dev.timlock.jarvis.ui.hud.SimDrawer
+import dev.timlock.jarvis.ui.hud.threeFingerLongPress
+import dev.timlock.jarvis.core.model.DisplayPreset
+import dev.timlock.jarvis.core.model.SimFault
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -38,6 +49,9 @@ import dev.timlock.jarvis.ui.hud.panels.PanelStackView
 import kotlinx.coroutines.delay
 
 private const val EXTRA_MODE = "jarvis.mode"
+private const val EXTRA_SCENARIO = "jarvis.scenario"
+private const val EXTRA_TIMESCALE = "jarvis.timescale"
+private const val EXTRA_AUTO_PTT = "jarvis.auto_ptt_ms"
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -50,6 +64,7 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
         // Only honor the launch extra on a fresh start, not on recreation.
         vm.start(if (savedInstanceState == null) intent?.getStringExtra(EXTRA_MODE) else null)
+        if (savedInstanceState == null) applyScenarioExtras(intent)
         setContent { MuseDeskApp(vm) { orbView = it } }
     }
 
@@ -57,6 +72,15 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         vm.onModeExtra(intent.getStringExtra(EXTRA_MODE))
+        applyScenarioExtras(intent)
+    }
+
+    /** §7.2: `--es jarvis.scenario <id> [--ef jarvis.timescale F] [--el jarvis.auto_ptt_ms N]`. Queued after the mode. */
+    private fun applyScenarioExtras(i: Intent?) {
+        val id = i?.getStringExtra(EXTRA_SCENARIO) ?: return
+        val ts = if (i.hasExtra(EXTRA_TIMESCALE)) i.getFloatExtra(EXTRA_TIMESCALE, 1f) else null
+        val auto = if (i.hasExtra(EXTRA_AUTO_PTT)) i.getLongExtra(EXTRA_AUTO_PTT, 0L) else null
+        vm.onScenarioExtras(id, ts, auto)
     }
 
     override fun onResume() {
@@ -87,6 +111,9 @@ class MainActivity : ComponentActivity() {
 private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) {
     val state by vm.store.state.collectAsState()
     var pairingOpen by remember { mutableStateOf(false) }
+    var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    val simMode = state.mode == Mode.SIM
+    LaunchedEffect(simMode) { if (!simMode) drawerOpen = false }
     val interstitialUntil = state.simInterstitialUntil
 
     LaunchedEffect(interstitialUntil) {
@@ -103,7 +130,7 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
             modifier = Modifier.fillMaxSize(),
         )
         HudBackground(drawBackground = false) {
-            Box {
+            Box(Modifier.threeFingerLongPress(enabled = simMode) { drawerOpen = true }) {
                 when {
                     state.mode == null && state.orbState == OrbState.BOOT -> Unit // loading persisted mode
                     interstitialUntil != null -> SimInterstitial()
@@ -120,6 +147,7 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         orbState = state.orbState,
                         onPttClick = { if (state.orbState == OrbState.UNPAIRED) pairingOpen = true },
                         orb = {},
+                        onSimChipClick = { drawerOpen = true },
                         hasDockedPanels = state.dockCount > 0,
                         overlay = {
                             PanelStackView(
@@ -134,8 +162,60 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         },
                     )
                 }
+                if (interstitialUntil == null) {
+                    if (state.perfHud) {
+                        val perf by vm.perfHud.collectAsState()
+                        val px = LocalPx.current
+                        PerfHud(perf, Modifier.align(Alignment.TopEnd).padding(top = px.dp(56f), end = px.dp(50f)))
+                    }
+                    if (simMode) SimLayer(vm, drawerOpen, state.forcedOrb, state.orbState, state.perfHud) { drawerOpen = it }
+                }
             }
             if (state.mode == Mode.SIM) SimFrame()
         }
     }
+}
+
+/** Collects the sim controller's flows; composed ONLY in sim mode. */
+@Composable
+private fun SimLayer(
+    vm: MainViewModel,
+    open: Boolean,
+    forced: OrbState?,
+    orb: OrbState,
+    perfHud: Boolean,
+    setOpen: (Boolean) -> Unit,
+) {
+    val sim = AppGraph.simController
+    val scenarios by sim.scenarios.collectAsState()
+    val run by sim.run.collectAsState()
+    val settings by sim.settings.collectAsState()
+    val log by sim.log.collectAsState()
+    var toast by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(toast) { if (toast != null) { delay(4000); toast = null } }
+    SimDrawer(
+        open = open, scenarios = scenarios, run = run, settings = settings,
+        forcedOrb = forced, currentOrb = orb, perfHud = perfHud, log = log, toast = toast,
+        onClose = { setOpen(false) },
+        onExit = { setOpen(false); vm.choose(Mode.REAL) },
+        onPlay = { sim.play(it)?.let { err -> toast = "error: $err" } },
+        onStop = { sim.stop() },
+        onPause = { sim.pause(it) },
+        onForceOrb = { vm.store.dispatch(StoreIntent.ForceOrb(it)) },
+        onPreset = { p ->
+            scope.launch {
+                val r = try { sim.preset(p) } catch (t: Throwable) { null }
+                toast = when {
+                    r == null -> "error: no reply"
+                    r.ok -> "ok"
+                    else -> "error: ${r.error ?: "?"}"
+                }
+            }
+        },
+        onFault = { sim.fault(it)?.let { err -> toast = "error: $err" } },
+        onRepair = { sim.repair()?.let { err -> toast = "error: $err" } },
+        onSettings = { sim.updateSettings(it) },
+        onPerfHud = { vm.store.dispatch(StoreIntent.SetPerfHud(it)) },
+    )
 }

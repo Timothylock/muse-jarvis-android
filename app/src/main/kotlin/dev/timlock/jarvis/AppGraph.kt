@@ -1,5 +1,6 @@
 package dev.timlock.jarvis
 
+import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.util.Log
@@ -12,12 +13,18 @@ import dev.timlock.jarvis.core.store.EarconKind
 import dev.timlock.jarvis.core.store.Effect
 import dev.timlock.jarvis.core.transport.GadgetTransport
 import dev.timlock.jarvis.core.store.toOrbSnapshot
-import dev.timlock.jarvis.transport.sim.SimDemoDriver
+import dev.timlock.jarvis.core.model.PerfHudData
+import dev.timlock.jarvis.render.orb.PerfStats
+import dev.timlock.jarvis.transport.sim.SimController
+import dev.timlock.jarvis.transport.sim.SimTransport
 import dev.timlock.jarvis.transport.sim.SyntheticLevels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /** App-lifetime singletons (manual wiring, no DI). Started from [JarvisApp.onCreate]. */
@@ -29,16 +36,22 @@ object AppGraph {
     val audioBus = AudioVisualBus()
 
     private val levels = SyntheticLevels(audioBus)
-    private val demo = SimDemoDriver(scope) { store.dispatch(it) }
+    private val calls = CallController(scope, { transport }) { store.dispatch(it) }
+    private val _perf = MutableStateFlow(PerfHudData())
+    val perfHud: StateFlow<PerfHudData> = _perf.asStateFlow()
+    lateinit var simController: SimController
+        private set
     private var started = false
 
     /** Active transport (set/cleared by MainViewModel); effects like ReplyCommand are forwarded to it. */
     @Volatile var transport: GadgetTransport? = null
 
     @Synchronized
-    fun start() {
+    fun start(context: Context) {
         if (started) return
         started = true
+        simController = SimController(context.applicationContext, store, scope) { transport as? SimTransport }
+        simController.start()
         // Orb snapshot for the GL thread on every state change.
         scope.launch { store.state.collect { orbHolder.snapshot = toOrbSnapshot(it) } }
         // Effects are not executed by a transport yet (M5): log names only (never caption text).
@@ -50,7 +63,20 @@ object AppGraph {
                     is Effect.Earcon -> if (e.kind == EarconKind.TIMER_CHIME) playTimerChime()
                     else -> Unit
                 }
-                if (store.state.value.mode == Mode.SIM) demo.onEffect(e)
+            }
+        }
+        // Call/audio effects: one coroutine, strictly in order.
+        scope.launch { store.effects.collect { calls.handle(it) } }
+        // Perf HUD sampler (1 Hz, only while the HUD is on; works in real mode too).
+        scope.launch {
+            while (true) {
+                delay(1000)
+                if (!store.state.value.perfHud) continue
+                _perf.value = PerfHudData(
+                    fps = PerfStats.fps, p50Ms = PerfStats.p50Ms, p95Ms = PerfStats.p95Ms,
+                    tier = PerfStats.tier.name, particles = PerfStats.particles, thermal = PerfStats.thermal,
+                    pssMb = (android.os.Debug.getPss() / 1024L).toInt(),
+                )
             }
         }
         // 50 Hz synthetic levels while simulating.

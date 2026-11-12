@@ -1,6 +1,8 @@
 package dev.timlock.jarvis.ui.hud
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -32,6 +34,8 @@ fun StatusBar(
     time: String,
     date: String,
     modifier: Modifier = Modifier,
+    /** Tap on the violet sim chip (opens the §7.3 drawer). */
+    onSimChipClick: (() -> Unit)? = null,
 ) {
     val px = LocalPx.current
     val base = JarvisType.StatusBar.style(JarvisColors.TextSecondary)
@@ -39,7 +43,12 @@ fun StatusBar(
         modifier.fillMaxWidth().height(px.dp(48f)).padding(horizontal = px.dp(50f)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (mode == Mode.SIM) SimChip() else Text("◈ MUSE DESK", style = base)
+        if (mode == Mode.SIM) {
+            Box(
+                Modifier.height(px.dp(48f)).let { if (onSimChipClick != null) it.clickable(onClick = onSimChipClick) else it },
+                contentAlignment = Alignment.Center,
+            ) { SimChip() }
+        } else Text("◈ MUSE DESK", style = base)
         Spacer(Modifier.width(px.dp(24f)))
         Text(
             buildAnnotatedString {
