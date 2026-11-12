@@ -86,6 +86,8 @@ data class AppState(
     val testInputEnabled: Boolean = false,
     /** A test WAV is currently being injected as mic input (amber TEST INPUT chip). */
     val testInputActive: Boolean = false,
+    /** User-tunable settings (§4.5); persisted by :app, applied here. */
+    val config: dev.timlock.jarvis.core.model.UserConfig = dev.timlock.jarvis.core.model.UserConfig(),
 ) {
     /** Derived: number of panels in [panels]. */
     val panelCount: Int get() = panels.panels.size
@@ -146,6 +148,7 @@ sealed interface Intent : Input {
     data class PanelCount(val count: Int) : Intent
     data object DisplayPulse : Intent
     data object AttentionPulse : Intent
+    data class SetConfig(val config: dev.timlock.jarvis.core.model.UserConfig) : Intent
     data class SetNight(val night: Boolean) : Intent
     data class SetPerfHud(val on: Boolean) : Intent
     /** Developer test-input flags (§7.7); no other effects. */

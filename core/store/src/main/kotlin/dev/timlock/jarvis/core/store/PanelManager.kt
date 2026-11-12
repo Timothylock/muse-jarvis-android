@@ -30,13 +30,13 @@ object PanelHeights {
 
 /** Pure functions over [PanelStack] (newest first, max 3): DESIGN §2.5 and §5.5. */
 object PanelManager {
-    const val MAX_PANELS = 3
+    const val MAX_PANELS = 3 // default; the runtime value is AppState.config.maxPanels
     const val ZONE_HEIGHT_PX = 656
     const val GAP_PX = 16
     const val STICKY_CAP_MS = 12L * 60 * 60 * 1000
     const val TIMER_RING_MS = 60_000L
     const val STATS_TTL_MS = 90_000L
-    const val DEFAULT_TTL_MS = 120_000L
+    const val DEFAULT_TTL_MS = dev.timlock.jarvis.core.model.UserConfig.DEFAULT_PANEL_TTL_MS
     /** Arrival timeline offset (review C9): panels that skip the orb-slide stage start at the bracket stage. */
     const val BRACKET_STAGE_MS = 380L
 
@@ -65,6 +65,7 @@ object PanelManager {
         stack: PanelStack, panel: Panel, now: Long, callOpen: Boolean, ttl: Long = DEFAULT_TTL_MS,
         /** True when the orb layout was already DOCKED before this input (C9 revealStartMs rule). */
         dockedBefore: Boolean = false,
+        maxPanels: Int = MAX_PANELS,
     ): PanelStack {
         var toast = stack.replacedToastAtMs
         val idx = stack.panels.indexOfFirst { it.id == panel.id }
@@ -89,13 +90,13 @@ object PanelManager {
             placed = panel.copy(createdAtMs = now, updatedAtMs = now, version = 0, pinned = false, collapsed = false, newRows = emptySet())
             placed = placed.withPlacement(null, callOpen, now, dockedBefore)
             var cur = stack.panels
-            if (cur.size >= MAX_PANELS) {
+            while (cur.size >= maxPanels) {
                 val victim = cur.lastOrNull { !isSticky(it) } ?: run { toast = now; cur.last() }
                 cur = cur.filter { it !== victim }
             }
             list = listOf(placed.relife(callOpen, now, ttl)) + cur
         }
-        list = enforceStickyCap(list, placed.id, callOpen, now, ttl)
+        list = enforceStickyCap(list, placed.id, callOpen, now, ttl, maxPanels)
         return layout(PanelStack(list, toast))
     }
 
@@ -134,9 +135,9 @@ object PanelManager {
         copy(expiresAtMs = lifetime(this, callOpen, now, ttl))
 
     /** At most 3 sticky (pinned counts): un-stick the oldest sticky other than [keepId]. */
-    private fun enforceStickyCap(list: List<Panel>, keepId: String, callOpen: Boolean, now: Long, ttl: Long): List<Panel> {
+    private fun enforceStickyCap(list: List<Panel>, keepId: String, callOpen: Boolean, now: Long, ttl: Long, maxPanels: Int = MAX_PANELS): List<Panel> {
         var cur = list
-        while (cur.count { isSticky(it) } > MAX_PANELS) {
+        while (cur.count { isSticky(it) } > maxPanels) {
             val victim = cur.filter { isSticky(it) && it.id != keepId }.minByOrNull { it.createdAtMs } ?: break
             cur = cur.map {
                 if (it === victim) it.copy(sticky = false, pinned = false).let { u -> u.copy(expiresAtMs = lifetime(u, callOpen, now, ttl)) } else it
@@ -171,7 +172,7 @@ object PanelManager {
 
     fun clearAll(stack: PanelStack): PanelStack = stack.copy(panels = emptyList())
 
-    fun pin(stack: PanelStack, id: String, pinned: Boolean, now: Long, callOpen: Boolean, ttl: Long = DEFAULT_TTL_MS): PanelStack {
+    fun pin(stack: PanelStack, id: String, pinned: Boolean, now: Long, callOpen: Boolean, ttl: Long = DEFAULT_TTL_MS, maxPanels: Int = MAX_PANELS): PanelStack {
         if (stack.panels.none { it.id == id }) return stack
         val list = stack.panels.map {
             if (it.id != id) it else {
@@ -179,7 +180,7 @@ object PanelManager {
                 u.copy(expiresAtMs = lifetime(u, callOpen, now, ttl))
             }
         }
-        return layout(stack.copy(panels = enforceStickyCap(list, id, callOpen, now, ttl)))
+        return layout(stack.copy(panels = enforceStickyCap(list, id, callOpen, now, ttl, maxPanels)))
     }
 
     /** Uncollapse [id]; collapse other DOCK panels (bottom-most first) until the stack fits again. */

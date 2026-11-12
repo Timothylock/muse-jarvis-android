@@ -9,6 +9,7 @@ import dev.timlock.jarvis.core.model.PanelContent
 import dev.timlock.jarvis.core.model.PanelPlacement
 import dev.timlock.jarvis.core.model.LeaderAnchor
 import dev.timlock.jarvis.core.model.TransportKind
+import dev.timlock.jarvis.core.model.UserConfig
 import dev.timlock.jarvis.core.transport.TransportEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -343,5 +344,61 @@ class PanelReducerTest {
         assertEquals(3, l.size) // n and z docked, so s is pulled into the dock as well
         h.send(Intent.DismissPanel("n")).send(Intent.DismissPanel("z"))
         assertEquals(0, toOrbSnapshot(h.s).leaders.size) // s alone, no call: a chip, no leader
+    }
+}
+
+class ConfigReducerTest {
+    private fun cfg(c: UserConfig) = Intent.SetConfig(c)
+
+    @Test fun customStandbyWindow() {
+        val h = PH.sim().send(cfg(UserConfig(standbyMs = 15_000L)))
+            .send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
+            .after(1000, Intent.PttUp)
+            .after(500, Intent.SinkFirstAudible).after(1000, Intent.SinkDrained).after(SETTLE_MS)
+        assertEquals(h.t + 15_000L, h.s.countdownEndMs)
+        assertEquals(h.t + 15_000L, h.s.standbyDeadline)
+    }
+
+    @Test fun configIsClamped() {
+        val h = PH.sim().send(cfg(UserConfig(standbyMs = 5_000L, maxPanels = 9, micGainDb = 40)))
+        assertEquals(15_000L, h.s.config.standbyMs)
+        assertEquals(3, h.s.config.maxPanels)
+        assertEquals(6, h.s.config.micGainDb)
+    }
+
+    @Test fun maxPanelsTwoEvictsOldest() {
+        val h = PH.sim().send(cfg(UserConfig(maxPanels = 2)))
+        h.card("a"); h.card("b"); h.card("c")
+        assertEquals(listOf("c", "b"), h.ids)
+    }
+
+    @Test fun loweringMaxPanelsTrimsExisting() {
+        val h = PH.sim()
+        h.card("a"); h.card("b"); h.card("c")
+        assertEquals(3, h.s.panelCount)
+        h.send(cfg(UserConfig(maxPanels = 2)))
+        assertEquals(listOf("c", "b"), h.ids)
+    }
+
+    @Test fun defaultTtlFollowsConfig() {
+        val h = PH.sim().send(cfg(UserConfig(panelTtlMs = 60_000L)))
+        h.card("a")
+        assertEquals(h.t + 60_000L, h.s.panels.panels[0].expiresAtMs)
+    }
+
+    @Test fun stickyDefaultMakesPanelsSticky() {
+        val h = PH.sim().send(cfg(UserConfig(panelTtlMs = null)))
+        h.card("a")
+        val p = h.s.panels.panels[0]
+        assertTrue(p.sticky)
+        assertEquals(h.t + PanelManager.STICKY_CAP_MS, p.expiresAtMs)
+        h.after(10 * 60_000L)
+        assertEquals(listOf("a"), h.ids)
+    }
+
+    @Test fun thinkTimeoutFollowsConfig() {
+        val h = PH.sim().send(cfg(UserConfig(thinkTimeoutMs = 30_000L)))
+            .send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready)).after(1000, Intent.PttUp)
+        assertEquals(h.t + 30_000L, h.s.thinkDeadline)
     }
 }

@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbState
+import dev.timlock.jarvis.core.model.QualityPref
+import dev.timlock.jarvis.core.model.UserConfig
 import dev.timlock.jarvis.core.store.AppState
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
 import android.util.Base64
@@ -32,7 +34,7 @@ import org.json.JSONObject
  * requires mode == SIM. Each command logs exactly one single-line JSON result to tag JARVIS_SIM.
  *
  * Commands: sim (SIM only) state, ptt, scenario, stop, pause, fault, repair, reload, list, hangup, pairflow, display, preset;
- * any mode: diag (adds testInput/call/lastCall), perfhud;
+ * any mode: diag (adds testInput/call/lastCall/night/config), perfhud, night, settings, config, config_set;
  * real-pairing (REAL only): import_pairing, export_identity, provision_token, unpair, pair_selftest, ble_smoke;
  * test hooks (REAL needs dev_setting test_input on + link online; SIM always allowed; results never carry server text):
  * inject_wav, make_wav, list_wav, dev_setting (test_input | test_thread_id).
@@ -41,7 +43,7 @@ class SimCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val cmd = intent.getStringExtra("cmd") ?: ""
         val value = intent.getStringExtra("value")
-        if (cmd == "display" || cmd == "preset" || cmd in REAL_ASYNC_CMDS || cmd in TEST_CMDS) {
+        if (cmd == "display" || cmd == "preset" || cmd == "config_set" || cmd in REAL_ASYNC_CMDS || cmd in TEST_CMDS) {
             handleAsync(context.applicationContext, cmd, intent)
             return
         }
@@ -66,6 +68,7 @@ class SimCommandReceiver : BroadcastReceiver() {
                 when (cmd) {
                     "display" -> displayResult(intent)
                     "preset" -> presetResult(intent)
+                    "config_set" -> configSetResult(intent)
                     in TEST_CMDS -> testResult(cmd, intent)
                     else -> realResult(context, cmd, intent)
                 }
@@ -227,6 +230,44 @@ class SimCommandReceiver : BroadcastReceiver() {
         return JSONObject().put("cmd", "display").put("name", name).put("ok", true).put("payload", payload)
     }
 
+    /**
+     * `config_set --es key <k> --es value <v>`; keys: standby_s, think_s, panel_ttl_s (0 = sticky), max_panels, clock24h,
+     * night_enabled, night_start / night_end (HH:MM), quality (auto|a|b|c), mic_gain_db. Persists, then dispatches.
+     */
+    private suspend fun configSetResult(intent: Intent): JSONObject {
+        val cmd = "config_set"
+        val key = intent.getStringExtra("key")?.trim().orEmpty()
+        val v = intent.getStringExtra("value")?.trim().orEmpty()
+        fun hm(x: String): Int? {
+            val p = x.split(":")
+            val h = p.getOrNull(0)?.toIntOrNull() ?: return null
+            val m = if (p.size > 1) p[1].toIntOrNull() ?: return null else 0
+            return if (h in 0..23 && m in 0..59) h * 60 + m else null
+        }
+        val f: ((UserConfig) -> UserConfig) = when (key) {
+            "standby_s" -> { val n = v.toLongOrNull() ?: return fail(cmd, "bad number"); { it.copy(standbyMs = n * 1000) } }
+            "think_s" -> { val n = v.toLongOrNull() ?: return fail(cmd, "bad number"); { it.copy(thinkTimeoutMs = n * 1000) } }
+            "panel_ttl_s" -> { val n = v.toLongOrNull() ?: return fail(cmd, "bad number"); { it.copy(panelTtlMs = if (n <= 0) null else n * 1000) } }
+            "max_panels" -> { val n = v.toIntOrNull() ?: return fail(cmd, "bad number"); { it.copy(maxPanels = n) } }
+            "clock24h" -> { val b = v.toBooleanStrictOrNull() ?: return fail(cmd, "bad boolean"); { it.copy(clock24h = b) } }
+            "night_enabled" -> { val b = v.toBooleanStrictOrNull() ?: return fail(cmd, "bad boolean"); { it.copy(nightEnabled = b) } }
+            "night_start" -> { val n = hm(v) ?: return fail(cmd, "want HH:MM"); { it.copy(nightStartMin = n) } }
+            "night_end" -> { val n = hm(v) ?: return fail(cmd, "want HH:MM"); { it.copy(nightEndMin = n) } }
+            "quality" -> { val q = QualityPref.entries.firstOrNull { it.name.equals(v, true) } ?: return fail(cmd, "want auto|a|b|c"); { it.copy(quality = q) } }
+            "mic_gain_db" -> { val n = v.toIntOrNull() ?: return fail(cmd, "bad number"); { it.copy(micGainDb = n) } }
+            else -> return fail(cmd, "unknown key")
+        }
+        val c = AppGraph.updateConfig(f)
+        return JSONObject().put("cmd", cmd).put("ok", true).put("config", configJson(c))
+    }
+
+    private fun configJson(c: UserConfig): JSONObject = JSONObject()
+        .put("standbyMs", c.standbyMs).put("thinkTimeoutMs", c.thinkTimeoutMs)
+        .put("panelTtlMs", c.panelTtlMs ?: JSONObject.NULL).put("maxPanels", c.maxPanels)
+        .put("clock24h", c.clock24h).put("nightEnabled", c.nightEnabled)
+        .put("nightStartMin", c.nightStartMin).put("nightEndMin", c.nightEndMin)
+        .put("quality", c.quality.name.lowercase()).put("micGainDb", c.micGainDb)
+
     private suspend fun presetResult(intent: Intent): JSONObject {
         if (AppGraph.store.state.value.mode != Mode.SIM) return fail("preset", "not in sim mode")
         val v = intent.getStringExtra("value")?.trim()?.lowercase() ?: return fail("preset", "missing value")
@@ -243,6 +284,30 @@ class SimCommandReceiver : BroadcastReceiver() {
             val on = intent.getBooleanExtra("on", false)
             store.dispatch(StoreIntent.SetPerfHud(on))
             return ok(cmd, on.toString())
+        }
+        when (cmd) {
+            // `night on|off|auto`: force & hold the night dim (§2.7) or return to the schedule.
+            "night" -> {
+                val f = when (value?.trim()?.lowercase()) {
+                    "on" -> NightController.Force.ON
+                    "off" -> NightController.Force.OFF
+                    "auto" -> NightController.Force.AUTO
+                    else -> return fail(cmd, "value must be on|off|auto")
+                }
+                AppGraph.night.setForce(f)
+                return ok(cmd, f.name.lowercase()).put("night", store.state.value.night)
+            }
+            // `settings open|close`: show/hide the §4.5 overlay (screenshots).
+            "settings" -> {
+                val open = when (value?.trim()?.lowercase()) {
+                    "open" -> true
+                    "close" -> false
+                    else -> return fail(cmd, "value must be open|close")
+                }
+                AppGraph.setSettingsOpen(open)
+                return ok(cmd, if (open) "open" else "close")
+            }
+            "config" -> return JSONObject().put("cmd", cmd).put("ok", true).put("config", configJson(store.state.value.config))
         }
         if (cmd !in SIM_CMDS) return fail(cmd, "unknown cmd")
         if (store.state.value.mode != Mode.SIM) return fail(cmd, "not in sim mode")
@@ -374,6 +439,9 @@ class SimCommandReceiver : BroadcastReceiver() {
             is dev.timlock.jarvis.core.store.PttState.Latched -> "latched"
         })
         .put("perfHud", s.perfHud)
+        .put("night", AppGraph.night.diag())
+        .put("config", configJson(s.config))
+        .put("settingsOpen", AppGraph.settingsOpen.value)
         .put("testInput", JSONObject().put("enabled", s.testInputEnabled).put("active", s.testInputActive))
         .put("callStats", AppGraph.calls.current?.toJson() ?: JSONObject.NULL)
         .put("lastCall", AppGraph.calls.last?.toJson() ?: JSONObject.NULL)

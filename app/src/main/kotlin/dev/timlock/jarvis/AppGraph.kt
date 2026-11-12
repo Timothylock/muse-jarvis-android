@@ -15,6 +15,9 @@ import dev.timlock.jarvis.feature.pairing.ui.FlowExit
 import dev.timlock.jarvis.feature.pairing.ui.PairingFlow
 import dev.timlock.jarvis.core.secure.KeystoreCredentialStore
 import dev.timlock.jarvis.core.model.OrbStateHolder
+import dev.timlock.jarvis.core.model.UserConfig
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.AppStore
 import dev.timlock.jarvis.core.store.EarconKind
@@ -61,6 +64,15 @@ object AppGraph {
         private set
     lateinit var testInput: TestInputController
         private set
+    lateinit var configStore: ConfigStore
+        private set
+    lateinit var night: NightController
+        private set
+    private val configMutex = Mutex()
+    private val _settingsOpen = MutableStateFlow(false)
+    /** The §4.5 settings overlay is shown (MainActivity hosts it; ADB `settings open|close`). */
+    val settingsOpen: StateFlow<Boolean> = _settingsOpen.asStateFlow()
+    fun setSettingsOpen(open: Boolean) { _settingsOpen.value = open }
     private lateinit var mic: MicSource
     private lateinit var earcons: Earcons
 
@@ -117,6 +129,17 @@ object AppGraph {
         }
     }
 
+    /** Persists then dispatches a config change (serialized; [f] sees the latest config). Returns the stored config. */
+    suspend fun updateConfig(f: (UserConfig) -> UserConfig): UserConfig = configMutex.withLock {
+        val c = f(store.state.value.config).sanitized()
+        configStore.save(c)
+        store.dispatch(Intent.SetConfig(c))
+        c
+    }
+
+    /** Fire-and-forget [updateConfig] for UI callbacks. */
+    fun updateConfigAsync(f: (UserConfig) -> UserConfig) { scope.launch { updateConfig(f) } }
+
     /** Active transport (set/cleared by MainViewModel); effects like ReplyCommand are forwarded to it. */
     @Volatile var transport: GadgetTransport? = null
 
@@ -130,6 +153,11 @@ object AppGraph {
         earcons = Earcons(app)
         calls = CallController(scope, { transport }, mic, Player(audioBus)) { store.dispatch(it) }
         devSettings = DevSettings(app)
+        configStore = ConfigStore(app)
+        night = NightController(store, scope)
+        // §4.5 persisted settings -> store at startup; the mic gain follows the config.
+        scope.launch { configMutex.withLock { store.dispatch(Intent.SetConfig(configStore.load())) } }
+        scope.launch { store.state.map { it.config.micGainDb }.distinctUntilChanged().collect { mic.gainDb = it } }
         testInput = TestInputController(app, store, mic, calls, devSettings)
         // §7.7: persisted developer flag -> store (keeps the injector's `active` flag as is).
         scope.launch {

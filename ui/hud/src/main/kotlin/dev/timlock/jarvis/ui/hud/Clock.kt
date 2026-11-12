@@ -19,6 +19,8 @@ fun rememberNow(): State<LocalDateTime> = produceState(LocalDateTime.now()) {
 private val TIME = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH)
 private val DATE_SHORT = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH)
 
-fun LocalDateTime.timeText(): String = format(TIME)
+private val TIME_12 = DateTimeFormatter.ofPattern("h:mm a", Locale.ENGLISH)
+
+fun LocalDateTime.timeText(clock24h: Boolean = true): String = format(if (clock24h) TIME else TIME_12)
 /** e.g. "Wed 11 Nov"; callers upper-case where the role requires it. */
 fun LocalDateTime.dateText(): String = format(DATE_SHORT)
