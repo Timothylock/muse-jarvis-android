@@ -33,6 +33,9 @@ class SdkHost internal constructor(private val t: SdkTransport) {
     fun pcmFlush(callId: String) { t.call(callId)?.onFlush() }
     fun onFallback(reqId: String, reply: String?, error: String?) = t.onFallback(reqId, reply, error)
 
+    /** pair_selftest: the loopback phone's writes enter here, then take the same path as GATT writes. */
+    fun pairSelftestWrite(packet: ByteArray) { t.selfTestListener?.onWrite(packet) }
+
     /** Self-test helpers for the Python byte[] <-> bytes conversions. */
     fun sampleBytes(): ByteArray = SAMPLE
     fun checkBytes(b: ByteArray): Boolean = b.contentEquals(SAMPLE)

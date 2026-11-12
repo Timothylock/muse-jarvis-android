@@ -41,7 +41,7 @@ import dev.timlock.jarvis.render.orb.OrbSurfaceView
 import dev.timlock.jarvis.ui.hud.AmbientFace
 import dev.timlock.jarvis.ui.hud.FirstRunScreen
 import dev.timlock.jarvis.ui.hud.HudBackground
-import dev.timlock.jarvis.feature.pairing.ui.PairingFlowScreen
+import dev.timlock.jarvis.ui.hud.PairingPlaceholderScreen
 import dev.timlock.jarvis.ui.hud.ImportPairingScreen
 import dev.timlock.jarvis.ui.hud.ImportScreenState
 import dev.timlock.jarvis.ui.hud.JarvisColors
@@ -117,11 +117,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) {
     val state by vm.store.state.collectAsState()
-    val pairingFlow by AppGraph.pairingFlow.collectAsState()
-    val importRequests by AppGraph.importRequests.collectAsState()
+    var pairingOpen by remember { mutableStateOf(false) }
     var importOpen by remember { mutableStateOf(false) }
-    // The pairing flow exits via "Import pairing" -> open the import screen (M6).
-    LaunchedEffect(importRequests) { if (importRequests > 0) importOpen = true }
     val importStatus by AppGraph.pairing.status.collectAsState()
     val lost = state.link is LinkState.PairingLost && state.mode == Mode.REAL
     var bannerDismissed by remember(state.link) { mutableStateOf(false) }
@@ -155,9 +152,9 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         onBack = { importOpen = false; AppGraph.pairing.resetStatus() },
                         modifier = Modifier.background(JarvisColors.BgVoid.copy(alpha = 0.88f)),
                     )
-                    pairingFlow != null -> PairingFlowScreen(pairingFlow!!)
+                    pairingOpen -> PairingPlaceholderScreen(onBack = { pairingOpen = false })
                     state.mode == null -> FirstRunScreen(
-                        onPair = { AppGraph.openPairing(); vm.choose(Mode.REAL) },
+                        onPair = { pairingOpen = true },
                         onSimulate = { vm.choose(Mode.SIM) },
                         onImport = { importOpen = true; vm.importPairing(false) },
                         orb = {},
@@ -167,7 +164,9 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         link = state.link,
                         orbState = state.orbState,
                         onPttClick = {
-                            if (state.orbState == OrbState.UNPAIRED) AppGraph.openPairing()
+                            if (state.orbState == OrbState.UNPAIRED) {
+                                if (state.mode == Mode.REAL) importOpen = true else pairingOpen = true
+                            }
                         },
                         orb = {},
                         onSimChipClick = { drawerOpen = true },
@@ -192,11 +191,11 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         },
                     )
                 }
-                if (lost && !bannerDismissed && !importOpen && state.mode != null && pairingFlow == null) {
-                    // §4.4: top of the content area (below the 48 px status bar). Re-pair opens the BLE flow at P1.
+                if (lost && !bannerDismissed && !importOpen && state.mode != null) {
+                    // §4.4: top of the content area (below the 48 px status bar). TODO(M7): Re-pair opens the BLE flow (P1).
                     val px = LocalPx.current
                     PairingLostBanner(
-                        onRepair = { bannerDismissed = true; AppGraph.openPairing(repair = true) },
+                        onRepair = { importOpen = true },
                         onLater = { bannerDismissed = true },
                         modifier = Modifier.align(Alignment.TopCenter).padding(top = px.dp(56f)),
                     )
@@ -252,7 +251,6 @@ private fun SimLayer(
         open = open, scenarios = scenarios, run = run, settings = settings,
         forcedOrb = forced, currentOrb = orb, perfHud = perfHud, log = log, toast = toast,
         onClose = { setOpen(false) },
-        onPairFlow = { setOpen(false); AppGraph.openPairing() },
         onExit = { setOpen(false); vm.choose(Mode.REAL) },
         onPlay = { sim.play(it)?.let { err -> toast = "error: $err" } },
         onStop = { sim.stop() },

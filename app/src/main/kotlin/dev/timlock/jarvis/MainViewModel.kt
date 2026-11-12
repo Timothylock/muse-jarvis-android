@@ -8,9 +8,6 @@ import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.store.Event
 import dev.timlock.jarvis.core.store.Intent
 import dev.timlock.jarvis.core.transport.GadgetTransport
-import dev.timlock.jarvis.feature.pairing.ble.AndroidBlePeripheral
-import dev.timlock.jarvis.feature.pairing.ble.AndroidNetworkStatus
-import dev.timlock.jarvis.transport.sdk.SdkTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -110,11 +107,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val ts = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         transportScope = ts
         val t = withContext(Dispatchers.Default) { TransportFactory.create(getApplication(), mode, AppGraph.credentials, ts) }
-        if (t is SdkTransport) {
-            // M7: the BLE byte pipe and network check live outside :transport:sdk; :app is the only place that knows both.
-            t.peripheral = AndroidBlePeripheral(getApplication())
-            t.network = AndroidNetworkStatus(getApplication())
-        }
         transport = t
         AppGraph.transport = t
         jobs = listOf(

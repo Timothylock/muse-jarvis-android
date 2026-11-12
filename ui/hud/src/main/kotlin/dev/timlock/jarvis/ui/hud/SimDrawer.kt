@@ -48,7 +48,6 @@ import dev.timlock.jarvis.core.model.ScenarioInfo
 import dev.timlock.jarvis.core.model.ScenarioRun
 import dev.timlock.jarvis.core.model.SimFault
 import dev.timlock.jarvis.core.model.SimLogEntry
-import dev.timlock.jarvis.core.model.SimPairOutcome
 import dev.timlock.jarvis.core.model.SimSettings
 import kotlin.math.ln
 import kotlin.math.pow
@@ -98,8 +97,6 @@ fun SimDrawer(
     onRepair: () -> Unit,
     onSettings: (SimSettings) -> Unit,
     onPerfHud: (Boolean) -> Unit,
-    /** §7.1 SimLink: opens the pairing flow (P1) in sim. */
-    onPairFlow: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val px = LocalPx.current
@@ -212,20 +209,6 @@ fun SimDrawer(
                 DrawerButton("admit timeout") { onFault(SimFault.ADMIT_TIMEOUT) }
                 DrawerButton("dead call") { onFault(SimFault.SESSION_DEAD) }
                 DrawerButton("re-pair", onClick = onRepair)
-            }
-
-            // Pairing (SimLink)
-            Section("Pairing")
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(px.dp(6f)), verticalArrangement = Arrangement.spacedBy(px.dp(6f))) {
-                DrawerButton("pair flow ›", onClick = onPairFlow)
-                DrawerButton(if (settings.pairInstant) "instant ☑" else "instant ☐", selected = settings.pairInstant) {
-                    onSettings(settings.copy(pairInstant = !settings.pairInstant))
-                }
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(px.dp(6f)), verticalArrangement = Arrangement.spacedBy(px.dp(6f))) {
-                for (o in SimPairOutcome.entries) {
-                    DrawerButton(o.wire, selected = settings.pairOutcome == o) { onSettings(settings.copy(pairOutcome = o)) }
-                }
             }
 
             // Latency

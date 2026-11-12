@@ -143,12 +143,6 @@ class SimController(
 
     private fun restoreTransportSettings() {
         transport()?.let { it.admitMs = _settings.value.admitMs; it.timescale = _settings.value.timescale }
-        applyPairSettings()
-    }
-
-    /** Pairing options are independent of scenario runs: always pushed to the live transport. */
-    fun applyPairSettings() {
-        transport()?.let { it.pairOutcome = _settings.value.pairOutcome; it.pairInstant = _settings.value.pairInstant }
     }
 
     fun pause(paused: Boolean) {
@@ -175,9 +169,8 @@ class SimController(
     }
 
     fun updateSettings(settings: SimSettings) {
-        val s = settings.copy(admitMs = settings.admitMs.coerceIn(0, 5000), thinkMs = settings.thinkMs.coerceIn(0, 20000), timescale = settings.timescale.coerceIn(0.25f, 4f))
+        val s = SimSettings(settings.admitMs.coerceIn(0, 5000), settings.thinkMs.coerceIn(0, 20000), settings.timescale.coerceIn(0.25f, 4f))
         _settings.value = s
-        applyPairSettings()
         if (engine == null) restoreTransportSettings()
     }
 

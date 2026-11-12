@@ -289,10 +289,9 @@ private class Ctx(var s: AppState, val now: Long) {
                 s = s.copy(sinkPlaying = false)
                 if (m == SPEAKING) s = s.copy(settleDeadline = now + SETTLE_MS)
             }
-            // The flow may open from the rest states (UNPAIRED, re-pair from OFFLINE, sim/idle with no call).
-            Intent.PairingOpen -> if (m == UNPAIRED || m == OFFLINE || (m == IDLE && !callOpen)) go(PAIRING)
+            Intent.PairingOpen -> if (m == UNPAIRED) go(PAIRING)
             is Intent.PairingClosed -> if (m == PAIRING) {
-                if (input.paired) go(if (stableOrb(s) == IDLE) IDLE else OFFLINE) else goStable()
+                if (input.paired) go(if (stableOrb(s) == IDLE) IDLE else OFFLINE) else go(UNPAIRED)
             }
             is Intent.PanelCount -> Unit // deprecated: panelCount is derived from the panel stack
             is Intent.DismissPanel -> s = s.copy(panels = PanelManager.dismiss(s.panels, input.id))
@@ -318,12 +317,7 @@ private class Ctx(var s: AppState, val now: Long) {
     }
 
     fun linkChanged(l: LinkState) {
-        val newlyLost = l is LinkState.PairingLost && s.link !is LinkState.PairingLost
         s = s.copy(link = l)
-        // §4.4: active (non-sticky) panels fade away when Muse unpairs us; the call teardown follows from stableOrb below.
-        if (newlyLost && s.panels.panels.any { !PanelManager.isSticky(it) }) {
-            s = s.copy(panels = PanelManager.layout(s.panels.copy(panels = s.panels.panels.filter { PanelManager.isSticky(it) })))
-        }
         when (m) {
             BOOT, PAIRING, ERROR -> Unit // ERROR resolves from the link when it exits
             OFFLINE, UNPAIRED -> goStable()

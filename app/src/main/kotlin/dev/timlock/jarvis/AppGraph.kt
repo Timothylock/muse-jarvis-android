@@ -8,11 +8,7 @@ import dev.timlock.jarvis.audio.Earcons
 import dev.timlock.jarvis.audio.MicSource
 import dev.timlock.jarvis.audio.Player
 import dev.timlock.jarvis.core.model.AudioVisualBus
-import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
-import dev.timlock.jarvis.core.secure.CredentialNames
-import dev.timlock.jarvis.feature.pairing.ui.FlowExit
-import dev.timlock.jarvis.feature.pairing.ui.PairingFlow
 import dev.timlock.jarvis.core.secure.KeystoreCredentialStore
 import dev.timlock.jarvis.core.model.OrbStateHolder
 import dev.timlock.jarvis.core.model.monoMillis
@@ -72,45 +68,6 @@ object AppGraph {
         private set
     private var started = false
 
-    private val _pairingFlow = MutableStateFlow<PairingFlow?>(null)
-    /** The open pairing flow (§4.2), or null. MainActivity shows [PairingFlowScreen] while non-null. */
-    val pairingFlow: StateFlow<PairingFlow?> = _pairingFlow.asStateFlow()
-    private val _importRequests = MutableStateFlow(0)
-    /** Increments when the flow was left via "Import pairing" (MainActivity then opens the import screen). */
-    val importRequests: StateFlow<Int> = _importRequests.asStateFlow()
-
-    /**
-     * Opens the pairing flow at P1. [repair] = §4.4 re-pair: the stored token stays selected, unless the PairingLost
-     * reason says the SDK token itself was revoked (reason contains "token"): then it is deleted and a note is shown.
-     */
-    fun openPairing(repair: Boolean = false) {
-        scope.launch {
-            synchronized(this@AppGraph) {
-                if (_pairingFlow.value != null) return@launch
-                val s = store.state.value
-                val sim = s.mode == Mode.SIM
-                var note: String? = null
-                if (repair && !sim && (s.link as? LinkState.PairingLost)?.reason?.contains("token", ignoreCase = true) == true) {
-                    credentials.delete(CredentialNames.SDK_TOKEN)
-                    note = "Create a new token at gadgets.muse.ai"
-                }
-                lateinit var flow: PairingFlow
-                flow = PairingFlow(
-                    AppPairingDeps(sim, appContext, credentials, store) { transport },
-                    scope,
-                    onExit = { exit ->
-                        _pairingFlow.compareAndSet(flow, null)
-                        if (exit == FlowExit.IMPORT) _importRequests.value += 1
-                        flow.close()
-                    },
-                    startNote = note,
-                    repair = repair,
-                )
-                _pairingFlow.value = flow
-            }
-        }
-    }
-
     /** Active transport (set/cleared by MainViewModel); effects like ReplyCommand are forwarded to it. */
     @Volatile var transport: GadgetTransport? = null
 
@@ -136,8 +93,6 @@ object AppGraph {
         // §6.8: the link service runs only in REAL mode; entering REAL also asks for the notification permission.
         scope.launch {
             store.state.map { it.mode }.distinctUntilChanged().collect { m ->
-                // A pairing flow belongs to one mode; switching modes (sim exit, reset) ends it.
-                _pairingFlow.value?.let { if (it.sim != (m == Mode.SIM) || m == null) it.cancel() }
                 if (m == Mode.REAL) {
                     if (android.os.Build.VERSION.SDK_INT >= 33 &&
                         app.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED

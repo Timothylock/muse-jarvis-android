@@ -135,24 +135,6 @@ class ReducerTest {
         assertEquals(IDLE, h.send(Intent.LinkChanged(H.online)).orb)
     }
 
-    @Test fun pairingOpensFromIdleAndClosesBackToStable() {
-        val h = H.sim()
-        assertEquals(PAIRING, h.send(Intent.PairingOpen).orb)
-        assertEquals(IDLE, h.send(Intent.PairingClosed(false)).orb)
-        val busy = H.listening().send(Intent.PairingOpen)
-        assertEquals(LISTENING, busy.orb) // never mid-call
-    }
-
-    @Test fun pairingLostTearsDownCallAndFadesPanels() {
-        val h = H.real().send(Intent.PttDown).send(Intent.CallPhaseChanged(CallPhase.Ready))
-        h.send(cmd("display.card", "{\"title\":\"Hi\"}", kind = TransportKind.REAL))
-        assertTrue(h.s.panels.panels.isNotEmpty())
-        h.send(Intent.LinkChanged(LinkState.PairingLost("token revoked")))
-        assertEquals(CallStatus.None, h.s.call)
-        assertTrue(Effect.HangUpCall in h.fx)
-        assertTrue(h.s.panels.panels.none { !PanelManager.isSticky(it) })
-    }
-
     // ---- PTT / call flow ------------------------------------------------------------------
 
     @Test fun pttDownFromIdleConnectsAndOpensCall() {
