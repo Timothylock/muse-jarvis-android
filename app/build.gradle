@@ -31,6 +31,7 @@ dependencies {
     implementation project(':render:orb')
     implementation project(':audio')
     implementation project(':core:secure')
+    implementation project(':feature:pairing')
     implementation project(':transport:sdk')
     implementation platform("androidx.compose:compose-bom:${rootProject.ext.composeBom}")
     implementation 'androidx.compose.ui:ui'
