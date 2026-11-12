@@ -1070,6 +1070,8 @@ class CallRunner:
                 noise_host=self.noise_host,
                 vm_id=self.vm["vm_id"] or self.vm["vm_name"],
                 vm_auth_token=self.vm["vm_auth_token"],
+                app_id="hatch-web",  # match the SDK's own voice-call CLI, which always
+                # passes an app context for the Noise URL (the bridge omitted it)
                 register_device=False,
                 device=DeviceDescription(self.node_id, "Muse voice", APP_VERSION + ";dp=1", {}),
                 run_command=lambda *unused: {"ok": False, "error": "unsupported command"},
@@ -1086,8 +1088,12 @@ class CallRunner:
             reason = "hangup" if self.hangup else "cancelled"
         except asyncio.TimeoutError:  # (TimeoutError is an OSError: keep before ConnectionError/Exception)
             reason = "admit_timeout" if not (call and call.ready.is_set()) else "failed:TimeoutError"
-        except ConnectionError:
-            reason = "session_dead" if (call and call.ready.is_set()) else "admission_failed"
+        except ConnectionError as exc:
+            # Include the SDK's fixed-string message (never server text): it splits
+            # "voice session failed" (server error event) from "voice response ended
+            # before readiness" (stream closed) from "session ended" (transport died).
+            reason = ("session_dead" if (call and call.ready.is_set()) else "admission_failed") \
+                + ":" + str(exc)
         except Exception as exc:
             reason = "failed:" + type(exc).__name__
         finally:
