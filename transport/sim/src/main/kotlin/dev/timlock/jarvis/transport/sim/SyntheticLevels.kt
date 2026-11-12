@@ -17,16 +17,11 @@ class SyntheticLevels(private val bus: AudioVisualBus, seed: Long = 0x5EED_1234L
     private val out = SyntheticVoice(seed, syllableHzMin = 4f, syllableHzMax = 6f, pauseMinMs = 300f, pauseMaxMs = 700f)
     private val mic = SyntheticVoice(seed xor 0x9E3779B9L, syllableHzMin = 3f, syllableHzMax = 5f, pauseMinMs = 250f, pauseMaxMs = 900f)
 
-    /**
-     * [driveOut]/[driveMic] choose which bus channels this synthesizer writes. From M5 the real Player analysis
-     * drives `bus.out` (driveOut = false) and the real mic drives `bus.mic`; the synthetic mic channel is only a
-     * fallback while RECORD_AUDIO is not granted.
-     */
-    fun step(orb: OrbState, nowMs: Long, driveOut: Boolean = true, driveMic: Boolean = true) {
+    fun step(orb: OrbState, nowMs: Long) {
         out.step(nowMs, active = orb == OrbState.SPEAKING)
         mic.step(nowMs, active = orb == OrbState.LISTENING || orb == OrbState.CONNECTING)
-        if (driveOut) out.publishTo(bus.out)
-        if (driveMic) mic.publishTo(bus.mic)
+        out.publishTo(bus.out)
+        mic.publishTo(bus.mic)
     }
 }
 
