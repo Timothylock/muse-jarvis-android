@@ -8,7 +8,12 @@ import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.store.Event
 import dev.timlock.jarvis.core.store.Intent
 import dev.timlock.jarvis.core.transport.GadgetTransport
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 
@@ -25,6 +30,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         data class Boot(val override: String?) : Cmd
         data class Choose(val mode: Mode) : Cmd
         data object Reset : Cmd
+        data class Import(val overwrite: Boolean) : Cmd
         data class Scenario(val id: String, val timescale: Float?, val autoPttMs: Long?) : Cmd
     }
 
@@ -32,6 +38,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private var started = false
     private var transport: GadgetTransport? = null
     private var jobs = emptyList<Job>()
+    private var transportScope: CoroutineScope? = null
 
     init {
         viewModelScope.launch {
@@ -40,6 +47,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     is Cmd.Boot -> boot(cmd.override)
                     is Cmd.Choose -> applyMode(cmd.mode, persist = true)
                     Cmd.Reset -> reset()
+                    is Cmd.Import -> {
+                        // First-run "Import pairing": switch to REAL (persisted) first, then import from the drop dir.
+                        if (store.state.value.mode != Mode.REAL) applyMode(Mode.REAL, persist = true)
+                        AppGraph.pairing.import(cmd.overwrite)
+                    }
                     is Cmd.Scenario -> {
                         if (store.state.value.mode != Mode.SIM) Log.w("JARVIS_SIM", "jarvis.scenario ignored: not in sim mode")
                         else AppGraph.simController.play(cmd.id, cmd.timescale, cmd.autoPttMs)?.let { Log.w("JARVIS_SIM", "jarvis.scenario failed: $it") }
@@ -75,6 +87,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun choose(mode: Mode) { commands.trySend(Cmd.Choose(mode)) }
 
+    /** UI import (§4.2.6); [overwrite] is the explicit confirm for a different stored identity. */
+    fun importPairing(overwrite: Boolean = false) { commands.trySend(Cmd.Import(overwrite)) }
+
     private suspend fun boot(extra: String?) {
         when (extra?.lowercase()) {
             "reset" -> reset()
@@ -89,13 +104,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         stopTransport()
         if (persist) modeStore.write(mode)
         store.dispatch(Intent.ChooseMode(mode))
-        val t = TransportFactory.create(mode, getApplication())
+        val ts = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        transportScope = ts
+        val t = withContext(Dispatchers.Default) { TransportFactory.create(getApplication(), mode, AppGraph.credentials, ts) }
         transport = t
         AppGraph.transport = t
         jobs = listOf(
             viewModelScope.launch { t.link.collect { store.dispatch(Intent.LinkChanged(it)) } },
             viewModelScope.launch { t.events.collect { store.dispatch(Event(it)) } },
-            viewModelScope.launch { t.start() },
+            viewModelScope.launch(Dispatchers.Default) { t.start() }, // never on the main thread (Python/IO)
         )
     }
 
@@ -109,7 +126,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         jobs.forEach { it.cancel() }
         jobs = emptyList()
         AppGraph.transport = null
-        transport?.stop()
+        val old = transport
         transport = null
+        if (old != null) withContext(Dispatchers.Default) { old.stop() }
+        transportScope?.cancel()
+        transportScope = null
     }
 }

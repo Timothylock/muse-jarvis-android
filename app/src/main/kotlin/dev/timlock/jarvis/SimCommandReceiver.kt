@@ -12,6 +12,8 @@ import dev.timlock.jarvis.core.store.Intent as StoreIntent
 import android.util.Base64
 import dev.timlock.jarvis.core.model.DisplayPreset
 import dev.timlock.jarvis.core.model.SimFault
+import dev.timlock.jarvis.core.transport.SdkToken
+import dev.timlock.jarvis.transport.sdk.SdkTransport
 import dev.timlock.jarvis.transport.sim.SimTransport
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +30,7 @@ class SimCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val cmd = intent.getStringExtra("cmd") ?: ""
         val value = intent.getStringExtra("value")
-        if (cmd == "display" || cmd == "preset") {
+        if (cmd == "display" || cmd == "preset" || cmd in REAL_ASYNC_CMDS) {
             handleAsync(cmd, intent)
             return
         }
@@ -45,12 +47,60 @@ class SimCommandReceiver : BroadcastReceiver() {
         val pending = goAsync()
         CoroutineScope(Dispatchers.Default).launch {
             val result = try {
-                if (cmd == "display") displayResult(intent) else presetResult(intent)
+                when (cmd) {
+                    "display" -> displayResult(intent)
+                    "preset" -> presetResult(intent)
+                    else -> realResult(cmd, intent)
+                }
             } catch (t: Throwable) {
                 fail(cmd, "internal: ${t.javaClass.simpleName}")
             }
             Log.i("JARVIS_SIM", result.toString())
             pending.finish()
+        }
+    }
+
+    /**
+     * Real-mode commands (pairing material; never SIM injection, §7.7). Results carry node ids and token hints only.
+     * `import_pairing [--ez overwrite true]`, `export_identity`, `provision_token --es token mgst_...`, `unpair`.
+     */
+    private suspend fun realResult(cmd: String, intent: Intent): JSONObject {
+        val mode = AppGraph.store.state.value.mode
+        if (mode == Mode.SIM) return fail(cmd, "not available in sim mode")
+        val pairing = AppGraph.pairing
+        return when (cmd) {
+            "import_pairing" -> {
+                if (mode != Mode.REAL) return fail(cmd, "real mode required (start with --es jarvis.mode real)")
+                val overwrite = intent.getBooleanExtra("overwrite", false)
+                when (val r = pairing.import(overwrite)) {
+                    is PairingController.Status.Imported -> JSONObject().put("cmd", cmd).put("ok", true).put("node_id", r.nodeId)
+                    is PairingController.Status.NoFiles -> fail(cmd, "no pairing files found").put("dir", r.dir)
+                    is PairingController.Status.Invalid -> fail(cmd, "invalid: ${r.reason}")
+                    is PairingController.Status.Conflict -> fail(cmd, "identity_conflict")
+                        .put("stored", r.storedNodeId).put("imported", r.importedNodeId)
+                        .put("hint", "re-run with --ez overwrite true to replace")
+                    is PairingController.Status.Failed -> fail(cmd, "failed: ${r.reason}")
+                    else -> fail(cmd, "unexpected status")
+                }
+            }
+            "export_identity" -> {
+                val (nodeId, path) = pairing.exportIdentity()
+                JSONObject().put("cmd", cmd).put("ok", true).put("node_id", nodeId).put("path", path)
+            }
+            "provision_token" -> {
+                val err = pairing.provisionToken(intent.getStringExtra("token"))
+                if (err != null) fail(cmd, err) else {
+                    val hint = SdkToken(intent.getStringExtra("token").orEmpty()).hint()
+                    JSONObject().put("cmd", cmd).put("ok", true).put("hint", hint)
+                }
+            }
+            "unpair" -> {
+                if (mode != Mode.REAL) return fail(cmd, "real mode required")
+                val t = AppGraph.transport ?: return fail(cmd, "no transport")
+                t.unpair()
+                JSONObject().put("cmd", cmd).put("ok", true)
+            }
+            else -> fail(cmd, "unknown cmd")
         }
     }
 
@@ -139,11 +189,26 @@ class SimCommandReceiver : BroadcastReceiver() {
     }
 
     private companion object {
+        val REAL_ASYNC_CMDS = setOf("import_pairing", "export_identity", "provision_token", "unpair")
         val SIM_CMDS = setOf("state", "ptt", "scenario", "stop", "pause", "fault", "repair", "reload", "list", "hangup")
     }
 
     private fun ok(cmd: String, value: String) = JSONObject().put("cmd", cmd).put("ok", true).put("value", value)
     private fun fail(cmd: String, error: String) = JSONObject().put("cmd", cmd).put("ok", false).put("error", error)
+
+    /** Read-only SdkDiagnostics for REAL mode (non-secret fields only); null otherwise. */
+    private fun sdkDiag(): Any {
+        val d = (AppGraph.transport as? SdkTransport)?.diagnostics?.value ?: return JSONObject.NULL
+        fun <T> T?.j(): Any = this ?: JSONObject.NULL
+        return JSONObject()
+            .put("pythonStarted", d.pythonStarted).put("pythonStartMs", d.pythonStartMs)
+            .put("sdkVersion", d.sdkVersion.j()).put("sdkCommit", d.sdkCommit.j())
+            .put("nodeId", d.nodeId.j()).put("paired", d.paired).put("tokenHint", d.tokenHint.j())
+            .put("tlsRoots", d.tlsRoots).put("httpsProbe", d.httpsProbe.j())
+            .put("commandCount", d.commandCount).put("describeChars", d.describeChars)
+            .put("storageRoundTrip", d.storageRoundTrip.j()).put("lastOutcome", d.lastOutcome.j())
+            .put("restarts", d.restarts).put("callPhase", d.callPhase.j()).put("advisoryErrors", d.advisoryErrors)
+    }
 
     private fun diag(s: AppState): JSONObject = JSONObject()
         .put("cmd", "diag").put("ok", true)
@@ -169,6 +234,7 @@ class SimCommandReceiver : BroadcastReceiver() {
             val r = AppGraph.simController.run.value
             JSONObject().put("id", r.id ?: JSONObject.NULL).put("step", r.step).put("total", r.total)
         } else JSONObject.NULL)
+        .put("sdk", sdkDiag())
         .put("panelCount", s.panelCount)
         .put("panels", JSONArray().also { arr ->
             for (p in s.panels.panels) arr.put(

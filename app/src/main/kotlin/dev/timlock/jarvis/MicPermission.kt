@@ -24,4 +24,16 @@ fun ComponentActivity.bindMicPermission() {
             }
         }
     }
+    // POST_NOTIFICATIONS (API 33+) for the link service's notification, asked on entering REAL mode (§4.1 step 4).
+    val notifLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    lifecycleScope.launch {
+        repeatOnLifecycle(Lifecycle.State.STARTED) {
+            AppGraph.needsNotificationPermission.collect { needed ->
+                if (needed) {
+                    AppGraph.markNotificationPermissionRequested()
+                    if (android.os.Build.VERSION.SDK_INT >= 33) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+        }
+    }
 }
