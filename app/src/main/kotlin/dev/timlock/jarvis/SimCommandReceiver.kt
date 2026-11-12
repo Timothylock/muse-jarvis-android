@@ -34,7 +34,7 @@ import org.json.JSONObject
  * requires mode == SIM. Each command logs exactly one single-line JSON result to tag JARVIS_SIM.
  *
  * Commands: sim (SIM only) state, ptt, scenario, stop, pause, fault, repair, reload, list, hangup, pairflow, display, preset;
- * any mode: diag (adds testInput/call/lastCall/night/config), perfhud, night, settings, config, config_set;
+ * any mode: export_logs (redacted logcat+diag zip), diag (adds testInput/call/lastCall/night/config), perfhud, night, settings, config, config_set;
  * real-pairing (REAL only): import_pairing, export_identity, provision_token, unpair, pair_selftest, ble_smoke;
  * test hooks (REAL needs dev_setting test_input on + link online; SIM always allowed; results never carry server text):
  * inject_wav, make_wav, list_wav, dev_setting (test_input | test_thread_id).
@@ -43,7 +43,7 @@ class SimCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val cmd = intent.getStringExtra("cmd") ?: ""
         val value = intent.getStringExtra("value")
-        if (cmd == "display" || cmd == "preset" || cmd == "config_set" || cmd in REAL_ASYNC_CMDS || cmd in TEST_CMDS) {
+        if (cmd == "display" || cmd == "preset" || cmd == "config_set" || cmd == "export_logs" || cmd in REAL_ASYNC_CMDS || cmd in TEST_CMDS) {
             handleAsync(context.applicationContext, cmd, intent)
             return
         }
@@ -69,6 +69,7 @@ class SimCommandReceiver : BroadcastReceiver() {
                     "display" -> displayResult(intent)
                     "preset" -> presetResult(intent)
                     "config_set" -> configSetResult(intent)
+                    "export_logs" -> exportLogsResult(context)
                     in TEST_CMDS -> testResult(cmd, intent)
                     else -> realResult(context, cmd, intent)
                 }
@@ -268,6 +269,13 @@ class SimCommandReceiver : BroadcastReceiver() {
         .put("nightStartMin", c.nightStartMin).put("nightEndMin", c.nightEndMin)
         .put("quality", c.quality.name.lowercase()).put("micGainDb", c.micGainDb)
 
+    private suspend fun exportLogsResult(context: Context): JSONObject {
+        val r = LogExporter.export(context, diag(AppGraph.store.state.value))
+        return if (r.ok) JSONObject().put("cmd", "export_logs").put("ok", true)
+            .put("path", r.path).put("bytes", r.bytes).put("lines", r.lines)
+        else fail("export_logs", r.error ?: "failed")
+    }
+
     private suspend fun presetResult(intent: Intent): JSONObject {
         if (AppGraph.store.state.value.mode != Mode.SIM) return fail("preset", "not in sim mode")
         val v = intent.getStringExtra("value")?.trim()?.lowercase() ?: return fail("preset", "missing value")
@@ -419,7 +427,7 @@ class SimCommandReceiver : BroadcastReceiver() {
             .put("restarts", d.restarts).put("callPhase", d.callPhase.j()).put("advisoryErrors", d.advisoryErrors)
     }
 
-    private fun diag(s: AppState): JSONObject = JSONObject()
+    internal fun diag(s: AppState): JSONObject = JSONObject()
         .put("cmd", "diag").put("ok", true)
         .put("mode", s.mode?.name?.lowercase() ?: "none")
         .put("link", when (s.link) {

@@ -82,7 +82,8 @@ Each command logs one JSON line to logcat tag `JARVIS_SIM`. Most commands only w
 `scenario --es id <id> [--ef timescale F] [--el auto_ptt_ms N]`, `state --es value <orb state|auto>`,
 `ptt --es value down|up|tap`, `display --es name display.card --es json_b64 <base64 params>`,
 `fault --es kind offline|revoke|send_fail|admit_timeout|session_dead`, `preset`, `stop`, `pause`, `reload`,
-`list`, `hangup`, `pairflow`. Read-only `diag` and `perfhud` work in both modes.
+`list`, `hangup`, `pairflow`. Read-only `diag`, `perfhud` and `export_logs` work in both modes (`export_logs` writes a redacted
+`jarvis-logs-<ts>.zip` with logcat, diag and about into the app's external `files/export/`, keeping the last 5).
 Real-mode pairing helpers: `export_identity`, `import_pairing`, `provision_token`, `unpair`, `pair_selftest`
 (a headless loopback of the SDK setup protocol), and `ble_smoke`.
 

@@ -47,6 +47,8 @@ data class SettingsInfo(
     val sdkCommit: String? = null,
     val perfHud: Boolean = false,
     val testInputEnabled: Boolean = false,
+    /** One-line result of the last log export (null = none yet). */
+    val exportStatus: String? = null,
 )
 
 private enum class Section(val label: String) {
@@ -70,6 +72,7 @@ fun SettingsOverlay(
     onPerfHud: (Boolean) -> Unit,
     onTestInput: (Boolean) -> Unit,
     onOpenSimPanel: () -> Unit,
+    onExportLogs: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val px = LocalPx.current
@@ -128,7 +131,7 @@ fun SettingsOverlay(
                     Section.Voice -> VoicePane(config, onConfig)
                     Section.Display -> DisplayPane(config, onConfig)
                     Section.Performance -> PerformancePane(info, config, onConfig, onPerfHud)
-                    Section.Developer -> DeveloperPane(info, onTestInput, onOpenSimPanel)
+                    Section.Developer -> DeveloperPane(info, onTestInput, onOpenSimPanel, onExportLogs)
                 }
                 Spacer(Modifier.height(px.dp(24f)))
             }
@@ -243,7 +246,7 @@ private fun PerformancePane(info: SettingsInfo, c: UserConfig, set: (UserConfig)
 }
 
 @Composable
-private fun DeveloperPane(info: SettingsInfo, onTestInput: (Boolean) -> Unit, onOpenSimPanel: () -> Unit) {
+private fun DeveloperPane(info: SettingsInfo, onTestInput: (Boolean) -> Unit, onOpenSimPanel: () -> Unit, onExportLogs: () -> Unit) {
     val px = LocalPx.current
     val sim = info.mode == Mode.SIM
     if (sim) {
@@ -253,6 +256,9 @@ private fun DeveloperPane(info: SettingsInfo, onTestInput: (Boolean) -> Unit, on
     }
     SRow("Test input", "Allows WAV injection as mic input (adb, real mode)") {
         Choice(listOf("On" to true, "Off" to false), info.testInputEnabled, onTestInput)
+    }
+    SRow("Export logs", info.exportStatus ?: "Redacted log bundle (zip) saved to the app's export folder") {
+        ActionButton("EXPORT", JarvisColors.CyanBright, onExportLogs)
     }
     Spacer(Modifier.height(px.dp(16f)))
     Text("ABOUT", style = JarvisType.HudLabel.copy(sizePx = 20f).style(JarvisColors.TextMuted))

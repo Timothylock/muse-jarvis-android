@@ -3,6 +3,8 @@ package dev.timlock.jarvis
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +33,7 @@ internal fun SettingsHost(
     val version = remember {
         try { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName.orEmpty() } catch (t: Throwable) { "" }
     }
+    var exportStatus by remember { mutableStateOf<String?>(null) }
     val info = SettingsInfo(
         mode = state.mode,
         link = state.link,
@@ -41,6 +44,7 @@ internal fun SettingsHost(
         sdkCommit = diag?.sdkCommit,
         perfHud = state.perfHud,
         testInputEnabled = state.testInputEnabled,
+        exportStatus = exportStatus,
     )
     val close = { AppGraph.setSettingsOpen(false) }
     SettingsOverlay(
@@ -60,6 +64,14 @@ internal fun SettingsHost(
             }
         },
         onOpenSimPanel = { close(); onOpenSimPanel() },
+        onExportLogs = {
+            exportStatus = "Exporting…"
+            val app = ctx.applicationContext
+            AppGraph.appScope.launch {
+                val r = LogExporter.export(app, vm.store.state.value.let { SimCommandReceiver().diag(it) })
+                exportStatus = if (r.ok) "Saved ${r.name} (${(r.bytes + 1023) / 1024} KB)" else "Export failed: ${r.error}"
+            }
+        },
         modifier = modifier,
     )
 }
