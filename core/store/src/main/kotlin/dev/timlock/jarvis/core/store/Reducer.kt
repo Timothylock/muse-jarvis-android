@@ -284,6 +284,7 @@ private class Ctx(var s: AppState, val now: Long) {
                 is CallPhase.Ended -> callEnded(p.reason)
             }
             Intent.SinkFirstAudible -> sinkFirstAudible()
+            Intent.ResetFallback -> s = s.copy(admitFailures = emptyList(), fallbackUntil = null)
             Intent.SinkDrained -> {
                 s = s.copy(sinkPlaying = false)
                 if (m == SPEAKING) s = s.copy(settleDeadline = now + SETTLE_MS)
