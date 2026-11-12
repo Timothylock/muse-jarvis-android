@@ -82,6 +82,10 @@ data class AppState(
     val fallbackUntil: Long? = null,
     /** The current turn is on the fallback path (mic buffers; FallbackSend on release). */
     val fallbackTurn: Boolean = false,
+    /** Developer flag: real-mode test-input injection (`inject_wav`) is allowed (§7.7). */
+    val testInputEnabled: Boolean = false,
+    /** A test WAV is currently being injected as mic input (amber TEST INPUT chip). */
+    val testInputActive: Boolean = false,
 ) {
     /** Derived: number of panels in [panels]. */
     val panelCount: Int get() = panels.panels.size
@@ -144,6 +148,8 @@ sealed interface Intent : Input {
     data object AttentionPulse : Intent
     data class SetNight(val night: Boolean) : Intent
     data class SetPerfHud(val on: Boolean) : Intent
+    /** Developer test-input flags (§7.7); no other effects. */
+    data class SetTestInput(val enabled: Boolean, val active: Boolean) : Intent
     /** Result of [Effect.FallbackSend]. [replyText] may be server content: never log it. */
     data class FallbackResult(val replyText: String?, val hasAudio: Boolean, val error: String?) : Intent
 }
