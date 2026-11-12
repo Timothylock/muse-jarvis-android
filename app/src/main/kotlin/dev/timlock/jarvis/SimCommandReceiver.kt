@@ -375,7 +375,7 @@ class SimCommandReceiver : BroadcastReceiver() {
         })
         .put("perfHud", s.perfHud)
         .put("testInput", JSONObject().put("enabled", s.testInputEnabled).put("active", s.testInputActive))
-        .put("call", AppGraph.calls.current?.toJson() ?: JSONObject.NULL)
+        .put("callStats", AppGraph.calls.current?.toJson() ?: JSONObject.NULL)
         .put("lastCall", AppGraph.calls.last?.toJson() ?: JSONObject.NULL)
         .put("scenario", if (s.mode == Mode.SIM) {
             val r = AppGraph.simController.run.value
