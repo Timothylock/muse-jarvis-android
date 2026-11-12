@@ -29,6 +29,12 @@ sealed interface Effect {
     data class ReplyCommand(val invocationId: String, val result: CommandResult) : Effect
     /** Sticky panels/timers changed (real mode): persist [stack] (§5.5). */
     data class PersistPanels(val stack: dev.timlock.jarvis.core.model.PanelStack) : Effect
+    /**
+     * Fallback voice path (§4.3.1): send the utterance captured since the last MicStart (≤ 60 s) via
+     * transport.sendDictatedTurn, then dispatch [Intent.FallbackResult]; reply PCM (if any) goes to the speaker,
+     * which reports SinkFirstAudible/SinkDrained as usual.
+     */
+    data object FallbackSend : Effect
     /** [text] may be server content: never log it. */
     data class ShowCaption(val text: String, val role: Role? = null, val final: Boolean = true) : Effect
 }

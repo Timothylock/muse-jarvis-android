@@ -58,19 +58,21 @@ class OrbStateHolder {
 /**
  * Lock-free audio level channel (DESIGN §3.3 step 6). One writer (an audio thread),
  * one reader (GL thread). Double-buffered with a sequence number.
- * Layout of a frame: [0] = env (0..1), [1] = onset count (as float), [2..9] = 8 bands (0..1).
+ * Layout of a frame: [0] = env (0..1), [1] = onset count (as float), [2..9] = 8 bands (0..1),
+ * [10] = strength of the latest onset (0..1; review H13: echoes only on stressed onsets, alpha 0.25 + 0.5·strength).
  */
 class AudioLevels {
     private val buffers = arrayOf(FloatArray(FRAME_SIZE), FloatArray(FRAME_SIZE))
     private val seq = AtomicInteger(0)
 
     /** Writer side. [bands] must have 8 entries. Allocation-free. */
-    fun publish(env: Float, onsetCount: Int, bands: FloatArray) {
+    fun publish(env: Float, onsetCount: Int, bands: FloatArray, onsetStrength: Float = 1f) {
         val next = seq.get() + 1
         val buf = buffers[next and 1]
         buf[0] = env
         buf[1] = onsetCount.toFloat()
         for (i in 0 until BANDS) buf[2 + i] = bands[i]
+        buf[2 + BANDS] = onsetStrength
         seq.set(next)
     }
 
@@ -83,7 +85,7 @@ class AudioLevels {
 
     companion object {
         const val BANDS = 8
-        const val FRAME_SIZE = 2 + BANDS
+        const val FRAME_SIZE = 3 + BANDS
     }
 }
 

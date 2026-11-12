@@ -269,6 +269,7 @@ private class Ctx(var s: AppState, val now: Long) {
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
             is Intent.SetNight -> s = s.copy(night = input.night)
             is Intent.SetPerfHud -> s = s.copy(perfHud = input.on)
+            is Intent.FallbackResult -> Unit // TODO(M5 store track)
             is Event -> event(input.event)
         }
     }

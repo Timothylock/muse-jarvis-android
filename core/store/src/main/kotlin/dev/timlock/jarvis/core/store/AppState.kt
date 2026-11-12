@@ -70,6 +70,10 @@ data class AppState(
     val night: Boolean = false,
     /** Perf HUD overlay (§3.6), toggled from the sim drawer or ADB `perfhud`; available in real mode too. */
     val perfHud: Boolean = false,
+    /** Caption bar (§2.5). Null = show the state word. Owned by the reducer (M5); fades 8 s after the call goes idle. */
+    val caption: dev.timlock.jarvis.core.model.Caption? = null,
+    /** When the current call became Ready (status bar CALL mm:ss), 0 = no call. */
+    val callSinceMs: Long = 0L,
 ) {
     /** Derived: number of panels in [panels]. */
     val panelCount: Int get() = panels.panels.size
@@ -130,6 +134,8 @@ sealed interface Intent : Input {
     data object AttentionPulse : Intent
     data class SetNight(val night: Boolean) : Intent
     data class SetPerfHud(val on: Boolean) : Intent
+    /** Result of [Effect.FallbackSend]. [replyText] may be server content: never log it. */
+    data class FallbackResult(val replyText: String?, val hasAudio: Boolean, val error: String?) : Intent
 }
 
 /** A transport event entering the store. */
