@@ -1,21 +1,10 @@
 package dev.timlock.jarvis.transport.sdk
 
 import android.content.Context
-import android.os.SystemClock
-import android.util.Log
-import com.chaquo.python.PyObject
-import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
 import dev.timlock.jarvis.core.model.CommandResult
-import dev.timlock.jarvis.core.model.Level
 import dev.timlock.jarvis.core.model.LinkState
-import dev.timlock.jarvis.core.model.Role
 import dev.timlock.jarvis.core.model.TransportKind
-import dev.timlock.jarvis.core.secure.CredentialNames
 import dev.timlock.jarvis.core.secure.CredentialStore
-import dev.timlock.jarvis.core.secure.PairingImport
-import dev.timlock.jarvis.core.secure.Redactor
-import dev.timlock.jarvis.core.transport.BlePeripheral
 import dev.timlock.jarvis.core.transport.CallHandle
 import dev.timlock.jarvis.core.transport.FallbackTurn
 import dev.timlock.jarvis.core.transport.GadgetTransport
@@ -25,39 +14,22 @@ import dev.timlock.jarvis.core.transport.PairingBundle
 import dev.timlock.jarvis.core.transport.PairingUiSink
 import dev.timlock.jarvis.core.transport.SdkToken
 import dev.timlock.jarvis.core.transport.TransportEvent
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import java.io.File
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Real transport: the upstream musegadget SDK (vendored, unmodified) embedded with Chaquopy (§6.5). The ONLY code
- * that knows Python exists. All Python-side behavior lives in jarvis_bridge.py; this class owns lifecycle, state
- * flows and the Kotlin callbacks ([SdkHost]).
+ * M6 CONTRACT STUB — track S replaces the body; the constructor and public members are fixed.
+ * Real transport: the upstream musegadget SDK embedded with Chaquopy (§6.5). The ONLY code that knows Python exists.
  */
 class SdkTransport(
     private val context: Context,
-    internal val store: CredentialStore,
+    private val store: CredentialStore,
     private val scope: CoroutineScope,
 ) : GadgetTransport {
     override val kind = TransportKind.REAL
@@ -69,275 +41,16 @@ class SdkTransport(
     /** Read-only diagnostics for `cmd diag` and the perf HUD (never contains secrets or server text). */
     val diagnostics: StateFlow<SdkDiagnostics> = _diag.asStateFlow()
 
-    private val app: Context = context.applicationContext
-    private val host = SdkHost(this)
-    private val startLock = Mutex()
-    @Volatile private var bridge: PyObject? = null
-    private val calls = ConcurrentHashMap<String, SdkCallHandle>()
-    private val fallbacks = ConcurrentHashMap<String, CompletableDeferred<FallbackTurn>>()
-
-    /** M7: set by :app before [pair] (the BLE byte pipe and the network check live outside this module). */
-    @Volatile var peripheral: BlePeripheral? = null
-    @Volatile var network: dev.timlock.jarvis.core.transport.NetworkStatus? = null
-
-    /** Set by [stop]; a transport is single-use, so a start racing a stop must not bring Python up again. */
-    @Volatile private var stopped = false
-
-    override suspend fun start() = startLock.withLock {
-        if (bridge != null || stopped) return@withLock
-        withContext(Dispatchers.IO) { startBlocking() }
-    }
-
-    private fun startBlocking() {
-        val t0 = SystemClock.elapsedRealtime()
-        try {
-            if (!Python.isStarted()) Python.start(AndroidPlatform(app))
-            val pyMs = SystemClock.elapsedRealtime() - t0
-            _diag.update { it.copy(pythonStarted = true, pythonStartMs = pyMs) }
-            Log.i(TAG, "Python started in $pyMs ms")
-            _link.value = if (store.exists(CredentialNames.PAIRING)) LinkState.Connecting else LinkState.Unpaired
-            _diag.update { it.copy(paired = store.exists(CredentialNames.PAIRING)) }
-            val module = Python.getInstance().getModule("jarvis_bridge")
-            val stateDir = File(app.noBackupFilesDir, "sdk-state").apply { mkdirs() }
-            module.callAttr("start", host, stateDir.absolutePath, versionName())
-            bridge = module
-            Log.i(TAG, "SDK imported + bridge started in ${SystemClock.elapsedRealtime() - t0} ms total")
-        } catch (c: CancellationException) {
-            throw c
-        } catch (t: Throwable) {
-            Log.e(TAG, "start failed: " + Redactor.redact(t.toString()).take(400))
-            _events.tryEmit(TransportEvent.Diagnostic(Level.ERROR, "python_start_failed", kind))
-            _link.value = LinkState.Offline("internal")
-        }
-    }
-
-    override suspend fun stop() {
-        stopped = true
-        calls.values.toList().forEach { it.onPhase("ended", "transport_stopped") }
-        calls.clear()
-        // Wait out an in-flight start (Python start takes seconds): otherwise bridge is still null here and the
-        // service loop keeps running after a switch to SIM, breaking §7.6 rule 7 (never both transports).
-        // NonCancellable: the caller's cancellation must not skip stopping Python.
-        withContext(NonCancellable) {
-            startLock.withLock {
-                val b = bridge ?: return@withLock
-                bridge = null
-                withContext(Dispatchers.IO) { runCatching { b.callAttr("stop") } }
-            }
-        }
-        _link.value = LinkState.Offline("stopped")
-    }
-
-    private val pairingActive = AtomicBoolean(false)
-    @Volatile internal var selfTestListener: BlePeripheral.Listener? = null
-
-    /**
-     * M7 BLE setup (§6.6): runs jarvis_bridge.pair_run (a mirror of musegadget.pair.pair) on an IO thread while the
-     * service loop keeps polling. Needs [peripheral] and [network]; a second concurrent call is rejected. Cancelling
-     * the caller stops the window and closes the peripheral promptly. A well-formed [token] is stored (and wins over
-     * a previously stored one); on success the Python side kicks the service so it connects immediately.
-     */
-    override suspend fun pair(token: SdkToken, ui: PairingUiSink): PairOutcome {
-        val b = bridge ?: return PairOutcome.BLE_ERROR
-        val p = peripheral ?: return PairOutcome.BLE_ERROR
-        val n = network ?: return PairOutcome.BLE_ERROR
-        if (!pairingActive.compareAndSet(false, true)) return PairOutcome.BLE_ERROR
-        try {
-            if (token.isWellFormed()) {
-                withContext(Dispatchers.IO) {
-                    store.write(CredentialNames.SDK_TOKEN, token.value.trim().toByteArray(Charsets.UTF_8))
-                }
-            }
-            val listener = PairListener(b)
-            return coroutineScope {
-                val run = async(Dispatchers.IO) {
-                    PairOutcome.valueOf(b.callAttr("pair_run", p, n, ui, token.value, false, listener).toString())
-                }
-                try {
-                    run.await()
-                } catch (c: CancellationException) {
-                    withContext(NonCancellable) {
-                        runCatching { b.callAttr("pair_cancel") }
-                        runCatching { run.join() }
-                        runCatching { b.callAttr("pair_clear_cancel") }
-                    }
-                    throw c
-                }
-            }
-        } catch (c: CancellationException) {
-            throw c
-        } catch (t: Throwable) {
-            Log.w(TAG, "pair failed: " + Redactor.redact(t.toString()).take(200))
-            return PairOutcome.BLE_ERROR
-        } finally {
-            pairingActive.set(false)
-        }
-    }
-
-    /**
-     * Headless verification (`adb ... cmd pair_selftest`): the full setup protocol over an in-process loopback, no
-     * radio, nothing saved, no network. Returns the Python result JSON. Phone writes re-enter through the same
-     * listener -> bridge.pair_write path the GATT server uses.
-     */
-    suspend fun pairSelfTest(mtu: Int): String {
-        val b = bridge ?: return "{\"ok\":false,\"error\":\"not_started\"}"
-        if (!pairingActive.compareAndSet(false, true)) return "{\"ok\":false,\"error\":\"busy\"}"
-        try {
-            selfTestListener = PairListener(b)
-            return withContext(Dispatchers.IO) { b.callAttr("pair_selftest", mtu).toString() }
-        } finally {
-            selfTestListener = null
-            pairingActive.set(false)
-        }
-    }
-
-    /** Validates + stores via [PairingImport], then restarts the service loop. */
-    override suspend fun importPairing(bundle: PairingBundle): ImportResult {
-        val r = withContext(Dispatchers.IO) { PairingImport.apply(store, bundle.bytes) }
-        return when (r) {
-            is PairingImport.Result.Ok -> { kick(); ImportResult(true) }
-            is PairingImport.Result.Invalid -> ImportResult(false, r.reason)
-            is PairingImport.Result.IdentityConflict -> ImportResult(false, "identity_conflict")
-        }
-    }
-
+    override suspend fun start() = Unit
+    override suspend fun stop() = Unit
+    override suspend fun pair(token: SdkToken, ui: PairingUiSink) = PairOutcome.BLE_ERROR // M7
+    /** Validates + stores via [dev.timlock.jarvis.core.secure.PairingImport], then restarts the service. */
+    override suspend fun importPairing(bundle: PairingBundle) = ImportResult(false, "stub")
     /** Deletes pairing.json only (identity is kept, §4.4), then restarts the service loop. */
-    override suspend fun unpair() {
-        withContext(Dispatchers.IO) { store.delete(CredentialNames.PAIRING) }
-        kick()
-    }
-
-    /** Re-reads credentials: the Python supervisor restarts the service immediately (no backoff). */
-    private suspend fun kick() {
-        val paired = store.exists(CredentialNames.PAIRING)
-        _diag.update { it.copy(paired = paired) }
-        val b = bridge
-        if (b == null) {
-            _link.value = if (paired) LinkState.Connecting else LinkState.Unpaired
-            return
-        }
-        withContext(Dispatchers.IO) { runCatching { b.callAttr("kick") } }
-    }
-
-    override suspend fun openCall(threadId: String?): CallHandle {
-        val b = bridge ?: throw IllegalStateException("not_started")
-        val id = UUID.randomUUID().toString()
-        val handle = SdkCallHandle(id, b, scope) { calls.remove(it) }
-        calls[id] = handle
-        _diag.update { it.copy(callPhase = "admitting") }
-        try {
-            withContext(Dispatchers.IO) { b.callAttr("open_call", id, threadId) }
-        } catch (c: CancellationException) {
-            calls.remove(id); throw c
-        } catch (t: Throwable) {
-            calls.remove(id)
-            Log.w(TAG, "openCall failed: " + Redactor.redact(t.toString()).take(200))
-            throw t
-        }
-        return handle
-    }
-
-    override suspend fun sendDictatedTurn(pcm: ShortArray, sessionId: UUID): FallbackTurn {
-        val b = bridge ?: return FallbackTurn(null, null, "offline")
-        val req = UUID.randomUUID().toString()
-        val done = CompletableDeferred<FallbackTurn>()
-        fallbacks[req] = done
-        try {
-            // The SDK caps a voice note at 2 MiB of WAV. TODO(M6): chunk/trim smarter for 60 s holds.
-            val wav = Wav.encode(if (pcm.size > MAX_FALLBACK_SAMPLES) pcm.copyOf(MAX_FALLBACK_SAMPLES) else pcm)
-            withContext(Dispatchers.IO) { b.callAttr("dictated", req, wav, sessionId.toString()) }
-            return try {
-                withTimeout(70_000) { done.await() }
-            } catch (e: TimeoutCancellationException) {
-                FallbackTurn(null, null, "send_failed")
-            }
-        } finally {
-            fallbacks.remove(req)
-        }
-    }
-
-    override fun replyCommand(invocationId: String, result: CommandResult) {
-        val b = bridge ?: return
-        scope.launch(Dispatchers.IO) {
-            runCatching { b.callAttr("reply_command", invocationId, result.ok, result.payloadJson, result.error) }
-        }
-    }
-
-    // ---- callbacks from Python (SdkHost) ----
-    internal fun call(id: String): SdkCallHandle? = calls[id]
-
-    internal fun onLink(kind: String, a: String?, b: String?) {
-        _link.value = when (kind) {
-            "unpaired" -> LinkState.Unpaired
-            "connecting" -> LinkState.Connecting
-            "online" -> LinkState.Online(a ?: "", b ?: "")
-            "offline" -> LinkState.Offline(a ?: "offline")
-            "pairing_lost" -> LinkState.PairingLost(a ?: "revoked")
-            else -> return
-        }
-        _diag.update { it.copy(paired = _link.value !is LinkState.Unpaired && store.exists(CredentialNames.PAIRING)) }
-    }
-
-    internal fun onCommand(invocationId: String, name: String, paramsJson: String) {
-        val ok = _events.tryEmit(TransportEvent.Command(invocationId, name, paramsJson, this.kind))
-        if (!ok) replyCommand(invocationId, CommandResult.error("display busy"))
-    }
-
-    internal fun onDiagnostic(level: String, code: String) {
-        val lv = runCatching { Level.valueOf(level) }.getOrDefault(Level.ERROR)
-        _events.tryEmit(TransportEvent.Diagnostic(lv, code, kind))
-    }
-
-    internal fun onTurn(started: Boolean, id: String) {
-        _events.tryEmit(if (started) TransportEvent.TurnStarted(id, kind) else TransportEvent.TurnSettled(id, kind))
-    }
-
-    internal fun onTranscript(role: String, text: String, final: Boolean) {
-        _events.tryEmit(TransportEvent.Transcript(if (role == "user") Role.USER else Role.MUSE, text, final, kind))
-    }
-
-    internal fun onAdvisory(count: Int) {
-        _diag.update { it.copy(advisoryErrors = count) }
-        _events.tryEmit(TransportEvent.AdvisoryError(count, kind))
-    }
-
-    internal fun onCallPhaseDiag(phase: String, reason: String?) {
-        _diag.update { it.copy(callPhase = if (reason != null) "$phase:$reason" else phase) }
-    }
-
-    internal fun onFallback(reqId: String, reply: String?, error: String?) {
-        fallbacks[reqId]?.complete(FallbackTurn(reply, null, error))
-    }
-
-    internal fun onDiag(key: String, value: String) {
-        _diag.update { d ->
-            when (key) {
-                "sdkVersion" -> d.copy(sdkVersion = value)
-                "sdkCommit" -> d.copy(sdkCommit = value)
-                "nodeId" -> d.copy(nodeId = value)
-                "tokenHint" -> d.copy(tokenHint = value.ifEmpty { null })
-                "tlsRoots" -> d.copy(tlsRoots = value.toIntOrNull() ?: -1)
-                "httpsProbe" -> d.copy(httpsProbe = value)
-                "commandCount" -> d.copy(commandCount = value.toIntOrNull() ?: 0)
-                "describeChars" -> d.copy(describeChars = value.toIntOrNull() ?: 0)
-                "storageRoundTrip" -> d.copy(storageRoundTrip = value == "true")
-                "lastOutcome" -> d.copy(lastOutcome = value)
-                "restarts" -> d.copy(restarts = value.toIntOrNull() ?: 0)
-                else -> d
-            }
-        }
-        if (key == "tlsRoots" || key == "httpsProbe" || key == "storageRoundTrip" || key == "describeChars" || key == "commandCount") {
-            Log.i(TAG, "diag $key=$value")
-        }
-    }
-
-    private fun versionName(): String =
-        runCatching { app.packageManager.getPackageInfo(app.packageName, 0).versionName }.getOrNull() ?: "0.0.0"
-
-    internal companion object {
-        const val TAG = "JARVIS_SDK"
-        const val MAX_FALLBACK_SAMPLES = (2 * 1024 * 1024 - Wav.HEADER_BYTES) / 2
-    }
+    override suspend fun unpair() = Unit
+    override suspend fun openCall(threadId: String?): CallHandle = throw UnsupportedOperationException("stub")
+    override suspend fun sendDictatedTurn(pcm: ShortArray, sessionId: UUID) = FallbackTurn(null, null, "stub")
+    override fun replyCommand(invocationId: String, result: CommandResult) = Unit
 }
 
 /** Snapshot for diagnostics. All fields are non-secret. */

@@ -25,7 +25,7 @@ sync() {
 gradle_run() {
   sync
   set +e
-  "${SSH[@]}" "docker run --rm -v $REMOTE:/work -v android-gradle-cache:/root/.gradle -v /volume2/docker/android-build/android-home:/root/.android android-build:35 gradle --console=plain $*" > dev/out/build.log 2>&1
+  "${SSH[@]}" "docker run --rm -v $REMOTE:/work -v android-gradle-cache:/root/.gradle -v /volume2/docker/android-build/android-home:/root/.android android-build:35-py311 gradle --console=plain $*" > dev/out/build.log 2>&1
   rc=$?
   set -e
   grep -E '^e: |error:|FAILED|BUILD SUCCESSFUL|BUILD FAILED|What went wrong' -A3 dev/out/build.log | head -80
