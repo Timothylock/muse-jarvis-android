@@ -7,7 +7,7 @@ import kotlin.math.sin
 
 /**
  * Babble synth (§7.1): white noise through three resonant bandpass (formant-like) filters, shaped by a 4-6 Hz
- * syllable envelope, in runs of syllables separated by 200-500 ms pauses. Clearly not a voice (no pitch).
+ * syllable envelope, in runs of syllables separated by 200-500 ms pauses. Clearly not a voice (no pitch). Level is moderate (peak about -12 dBFS) because it now plays audibly.
  * Allocation-free after construction. Not thread-safe: one instance per speech.
  */
 class SimVoice(seed: Long = 0x5EEDL, private val rate: Int = RATE) {
@@ -85,7 +85,7 @@ class SimVoice(seed: Long = 0x5EEDL, private val rate: Int = RATE) {
             z2[i] = -b0[i] * noise - a2[i] * o
             y += o * (if (i == 0) 1.0 else if (i == 1) 0.8 else 0.5)
         }
-        return (y * env * gain * 0.8 * 32767).coerceIn(-32768.0, 32767.0)
+        return (y * env * gain * 0.65 * 32767).coerceIn(-32768.0, 32767.0)
     }
 
     companion object { const val RATE = 24_000 }
