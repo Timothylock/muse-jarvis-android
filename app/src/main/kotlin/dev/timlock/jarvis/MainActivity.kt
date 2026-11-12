@@ -176,6 +176,8 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         caption = state.caption,
                         callSinceMs = state.callSinceMs,
                         latched = state.latched,
+                        testInputEnabled = state.testInputEnabled,
+                        testInputActive = state.testInputActive,
                         onPttDown = { vm.store.dispatch(StoreIntent.PttDown) },
                         onPttUp = { vm.store.dispatch(StoreIntent.PttUp) },
                         onHangUp = { vm.store.dispatch(StoreIntent.HangUp) },

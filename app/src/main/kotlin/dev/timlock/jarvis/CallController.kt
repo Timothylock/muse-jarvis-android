@@ -10,7 +10,9 @@ import dev.timlock.jarvis.core.store.Input
 import dev.timlock.jarvis.core.store.Intent
 import dev.timlock.jarvis.core.transport.CallHandle
 import dev.timlock.jarvis.core.transport.GadgetTransport
+import dev.timlock.jarvis.core.transport.PcmSink
 import dev.timlock.jarvis.core.transport.PcmSinkListener
+import dev.timlock.jarvis.core.transport.PcmSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -42,9 +44,33 @@ class CallController(
     private var sessionId: UUID = UUID.randomUUID()
     private var lastFallbackMs = 0L
 
+    /** Consumed (and cleared) by the next [open]: a dedicated Muse thread for test calls (§7.7); null = SDK default. */
+    @Volatile var nextThreadId: String? = null
+    /** Marks the next call as a test call (TestInputController). */
+    @Volatile var nextCallIsTest: Boolean = false
+    private var callSeq = 0
+    @Volatile private var track: CallTrack? = null
+    @Volatile private var lastTrack: CallTrack? = null
+
+    /** Snapshot of the open call's stats, or null. */
+    val current: CallStats? get() = track?.snapshot(monoMillis())
+    /** Snapshot of the most recent ended call, or null. */
+    val last: CallStats? get() = lastTrack?.snapshot(monoMillis())
+
+    private fun finishTrack(reason: String) {
+        val t = track ?: return
+        track = null
+        if (t.endReason == null) t.endReason = reason
+        if (t.endedAtMs == 0L) t.endedAtMs = monoMillis()
+        lastTrack = t
+    }
+
     init {
         player.setListener(object : PcmSinkListener {
-            override fun onFirstAudible() { dispatch(Intent.SinkFirstAudible) }
+            override fun onFirstAudible() {
+                track?.let { t -> val e = t.turnEndMs; if (e != 0L) { t.firstAudibleMs = monoMillis() - e; t.turnEndMs = 0L } }
+                dispatch(Intent.SinkFirstAudible)
+            }
             override fun onDrained() { dispatch(Intent.SinkDrained) }
         })
     }
@@ -58,6 +84,7 @@ class CallController(
                 val h = handle
                 openJob?.cancel()
                 try { h?.hangUp() } catch (t: Throwable) { Log.w("JARVIS_SIM", "hangUp failed: ${t.javaClass.simpleName}") }
+                finishTrack("hangup")
                 dropCall()
                 player.flush()
             }
@@ -68,7 +95,7 @@ class CallController(
             }
             Effect.MicStart -> mic.start()
             Effect.MicLive -> mic.live()
-            Effect.MicSilence -> mic.silence()
+            Effect.MicSilence -> { track?.turnEndMs = monoMillis(); mic.silence() }
             is Effect.MicStopAfter -> mic.stopAfter(e.delayMs)
             Effect.MicStop -> mic.stop()
             Effect.FallbackSend -> fallbackSend()
@@ -84,21 +111,30 @@ class CallController(
             return
         }
         activeTransport = t
+        val threadId = nextThreadId?.takeIf { it.isNotBlank() }
+        nextThreadId = null
+        val test = nextCallIsTest
+        nextCallIsTest = false
+        val tr = CallTrack(++callSeq, threadId != null, test, monoMillis())
+        track = tr
         openJob = scope.launch {
             val h = try {
-                t.openCall(null)
+                t.openCall(threadId)
             } catch (c: CancellationException) {
                 throw c
             } catch (th: Throwable) {
                 Log.w("JARVIS_SIM", "openCall failed: ${th.javaClass.simpleName}")
+                finishTrack("admission_failed")
                 dispatch(Intent.CallPhaseChanged(CallPhase.Ended("admission_failed")))
                 return@launch
             }
-            h.attachSpeaker(player)
-            h.attachMic(mic.openStream())
+            h.attachSpeaker(CountingSink(player, tr.samples))
+            h.attachMic(CountingSource(mic.openStream(), tr))
             synchronized(this@CallController) { handle = h }
             stateJob = launch {
                 h.state.takeWhile { phase ->
+                    if (phase == CallPhase.Ready && tr.admissionMs == null) tr.admissionMs = monoMillis() - tr.openedAtMs
+                    if (phase is CallPhase.Ended) { tr.endReason = phase.reason; if (track === tr) finishTrack(phase.reason) }
                     dispatch(Intent.CallPhaseChanged(phase))
                     phase !is CallPhase.Ended
                 }.collect {}
@@ -146,11 +182,29 @@ class CallController(
 
     @Synchronized
     private fun dropCall() {
+        finishTrack("dropped")
         openJob?.cancel(); openJob = null
         stateJob?.cancel(); stateJob = null
         mic.endStream()
         handle = null
         activeTransport = transport()
+    }
+
+    /** Counts frames the call handle pulled from the mic stream (live = not all-zero). No per-frame allocation. */
+    private class CountingSource(private val inner: PcmSource, private val t: CallTrack) : PcmSource {
+        override suspend fun nextFrame(): ShortArray? {
+            val f = inner.nextFrame() ?: return null
+            t.frames.incrementAndGet()
+            for (x in f) if (x.toInt() != 0) { t.liveFrames.incrementAndGet(); break }
+            return f
+        }
+    }
+
+    /** Forwards everything to [inner]; counts samples written. */
+    private class CountingSink(private val inner: PcmSink, private val n: java.util.concurrent.atomic.AtomicLong) : PcmSink {
+        override fun write(pcm: ShortArray) { n.addAndGet(pcm.size.toLong()); inner.write(pcm) }
+        override fun flush() = inner.flush()
+        override fun setListener(listener: PcmSinkListener?) = inner.setListener(listener)
     }
 
     private companion object {
