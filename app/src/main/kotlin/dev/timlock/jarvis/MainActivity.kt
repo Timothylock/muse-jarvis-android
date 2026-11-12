@@ -149,6 +149,13 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         orb = {},
                         onSimChipClick = { drawerOpen = true },
                         hasDockedPanels = state.dockCount > 0,
+                        layout = state.layout,
+                        caption = state.caption,
+                        callSinceMs = state.callSinceMs,
+                        latched = state.latched,
+                        onPttDown = { vm.store.dispatch(StoreIntent.PttDown) },
+                        onPttUp = { vm.store.dispatch(StoreIntent.PttUp) },
+                        onHangUp = { vm.store.dispatch(StoreIntent.HangUp) },
                         overlay = {
                             PanelStackView(
                                 stack = state.panels,
