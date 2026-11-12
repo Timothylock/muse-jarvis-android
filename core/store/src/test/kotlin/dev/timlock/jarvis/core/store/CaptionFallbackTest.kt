@@ -3,6 +3,7 @@ package dev.timlock.jarvis.core.store
 import dev.timlock.jarvis.core.model.CallPhase
 import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
+import dev.timlock.jarvis.core.model.OrbLayout
 import dev.timlock.jarvis.core.model.OrbState.CONNECTING
 import dev.timlock.jarvis.core.model.OrbState.ERROR
 import dev.timlock.jarvis.core.model.OrbState.IDLE
@@ -245,15 +246,14 @@ class CaptionFallbackTest {
         assertFalse(f.s.fallbackTurn)
     }
 
-    @Test fun textOnlyReplyShowsCaptionCardAndSpeaksLite() {
+    @Test fun textOnlyReplyShowsCaptionOnlyAndSpeaksLite() {
         val f = F.fallbackThinking().after(300, Intent.FallbackResult("one two three", false, null))
         assertEquals(SPEAKING, f.orb)
         assertEquals(Role.MUSE, f.s.caption!!.role)
-        val p = f.s.panels.panels.single()
-        assertEquals("MUSE", p.title)
-        assertTrue(p.textReply)
-        assertTrue(p.sim)
-        assertEquals("one two three", (p.content as dev.timlock.jarvis.core.model.PanelContent.Card).body)
+        assertEquals("one two three", f.s.caption!!.text)
+        // Fix batch 2026-11-12: a plain text reply lives in the caption bar only; no panel is created.
+        assertTrue(f.s.panels.panels.isEmpty())
+        assertEquals(OrbLayout.CENTERED, f.s.layout)
         assertEquals(f.t + 3 * SPEAKING_LITE_MS_PER_WORD, f.s.settleDeadline)
         f.after(3 * SPEAKING_LITE_MS_PER_WORD - 1)
         assertEquals(SPEAKING, f.orb)

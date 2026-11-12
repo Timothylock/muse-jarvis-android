@@ -90,8 +90,6 @@ data class Panel(
      * chips: arrival - 380 (they start at the bracket stage). Re-set on DOCK promotion of a chip.
      */
     val revealStartMs: Long = createdAtMs,
-    /** Local panel showing a fallback-path text reply (§4.3.1 step 4); not a Muse display command. */
-    val textReply: Boolean = false,
 )
 
 /** Panel stack as rendered, newest first (index 0 = top). Max 3. */

@@ -57,8 +57,6 @@ const val FALLBACK_FAILURES = 2
 const val FALLBACK_WINDOW_MS = 600_000L
 /** SPEAKING-lite for a text-only fallback reply. */
 const val SPEAKING_LITE_MS_PER_WORD = 60L
-const val TEXT_REPLY_PANEL_ID = "text-reply"
-private const val TEXT_REPLY_MAX_CHARS = 400
 
 private val TAKEOVER_MARKERS = listOf("takeover", "taken_over", "another_device", "moved")
 private val ACTIVE = setOf(CONNECTING, LISTENING, THINKING, SPEAKING, STANDBY)
@@ -490,20 +488,13 @@ private class Ctx(var s: AppState, val now: Long) {
         }
     }
 
-    /** Fallback text-only reply (§4.3.1 step 4): caption + local "text reply" card + SPEAKING-lite (60 ms/word). Never logged. */
+    /**
+     * Fallback text-only reply (§4.3.1 step 4): caption + SPEAKING-lite (60 ms/word). Never logged.
+     * Owner direction (fix batch 2026-11-12): NO local panel — the caption bar already shows the text; panels
+     * come only from explicit display.* commands.
+     */
     fun textOnlyReply(text: String) {
         setCaption(text, Role.MUSE, true)
-        val body = if (text.length > TEXT_REPLY_MAX_CHARS) text.take(TEXT_REPLY_MAX_CHARS - 1).trimEnd() + "…" else text
-        val panel = Panel(
-            id = TEXT_REPLY_PANEL_ID, type = PanelType.CARD, title = "MUSE", content = PanelContent.Card(body = body),
-            createdAtMs = now, updatedAtMs = now, sim = s.mode == Mode.SIM, textReply = true,
-        )
-        val before = s.panels.panels.firstOrNull { it.id == panel.id }
-        val next = PanelManager.upsert(s.panels, panel, now, callOpen, panelTtl, dockedBefore = s.layout == OrbLayout.DOCKED, maxPanels = s.config.maxPanels)
-        val after = next.panels.first { it.id == panel.id }
-        val arrived = before == null || before.placement != after.placement
-        val pulse = if (arrived && after.placement == PanelPlacement.DOCK) after.revealStartMs + PanelManager.BRACKET_STAGE_MS else now
-        s = s.copy(panels = next, pulseAtMs = pulse)
         enterSpeaking()
         val words = text.trim().split(Regex("\\s+")).size.coerceAtLeast(1)
         s = s.copy(settleDeadline = now + words * SPEAKING_LITE_MS_PER_WORD)
