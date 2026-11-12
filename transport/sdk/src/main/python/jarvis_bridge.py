@@ -172,7 +172,13 @@ def _setup_logging():
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
 
+_DIAG_CACHE = {}
+
+
 def _diag(key, value):
+    # Cached so a later SdkTransport instance (same process, Python already started) still sees the
+    # one-time self-test results; start() replays the cache to the new host.
+    _DIAG_CACHE[key] = value
     try:
         HOST.onDiag(key, "" if value is None else str(value))
     except Exception:
@@ -610,6 +616,9 @@ def start(host, state_dir, version_name):
         _tls_setup()
         _bytes_selftest()
         threading.Thread(target=_https_probe, name="https-probe", daemon=True).start()
+    else:
+        for key, value in list(_DIAG_CACHE.items()):
+            _diag(key, value)
     _B.start()
 
 

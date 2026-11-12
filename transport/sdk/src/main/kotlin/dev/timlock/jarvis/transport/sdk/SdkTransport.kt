@@ -28,6 +28,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,8 +72,11 @@ class SdkTransport(
     private val calls = ConcurrentHashMap<String, SdkCallHandle>()
     private val fallbacks = ConcurrentHashMap<String, CompletableDeferred<FallbackTurn>>()
 
+    /** Set by [stop]; a transport is single-use, so a start racing a stop must not bring Python up again. */
+    @Volatile private var stopped = false
+
     override suspend fun start() = startLock.withLock {
-        if (bridge != null) return@withLock
+        if (bridge != null || stopped) return@withLock
         withContext(Dispatchers.IO) { startBlocking() }
     }
 
@@ -100,11 +104,19 @@ class SdkTransport(
     }
 
     override suspend fun stop() {
+        stopped = true
         calls.values.toList().forEach { it.onPhase("ended", "transport_stopped") }
         calls.clear()
-        val b = bridge ?: return
-        bridge = null
-        withContext(Dispatchers.IO) { runCatching { b.callAttr("stop") } }
+        // Wait out an in-flight start (Python start takes seconds): otherwise bridge is still null here and the
+        // service loop keeps running after a switch to SIM, breaking §7.6 rule 7 (never both transports).
+        // NonCancellable: the caller's cancellation must not skip stopping Python.
+        withContext(NonCancellable) {
+            startLock.withLock {
+                val b = bridge ?: return@withLock
+                bridge = null
+                withContext(Dispatchers.IO) { runCatching { b.callAttr("stop") } }
+            }
+        }
         _link.value = LinkState.Offline("stopped")
     }
 
