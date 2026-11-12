@@ -1,0 +1,13 @@
+{
+  "id": "ambient_push_timer",
+  "dp": 1,
+  "title": "No call: Muse pushes a 90 s timer (ambient chip, attention pulse); it counts down and chimes",
+  "start": "idle",
+  "note": "Manual tail: watch the countdown, the chime at zero, and tap the timer to acknowledge it.",
+  "steps": [
+    {"at": "+0", "op": "command", "name": "display.timer", "params": {"id": "ambient-timer", "label": "Tea", "seconds": 90}},
+    {"at": "+200", "op": "expect", "panel_count": 1, "panel_ids": ["ambient-timer"], "orb": "idle", "call": "none"},
+    {"op": "wait", "ms": 3000},
+    {"op": "expect", "panel_count": 1, "orb": "idle"}
+  ]
+}

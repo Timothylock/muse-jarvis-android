@@ -1,0 +1,17 @@
+{
+  "id": "card_while_thinking",
+  "dp": 1,
+  "title": "Card arrives during THINKING, before any audio",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "What should I know about tomorrow?", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 3000},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "command", "name": "display.card", "params": {"id": "tomorrow", "title": "Tomorrow", "body": "Two meetings and a dentist appointment.", "bullets": ["09:30 Standup", "13:00 Design review", "16:15 Dentist"]}},
+    {"at": "+300", "op": "expect", "orb": "thinking", "panel_count": 1},
+    {"at": "+1900", "op": "speak", "text": "You have two meetings and a dentist appointment tomorrow afternoon.", "ms": 4000},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 1, "within_ms": 1500}
+  ]
+}

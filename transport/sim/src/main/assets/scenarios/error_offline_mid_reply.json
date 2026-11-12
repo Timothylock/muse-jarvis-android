@@ -1,0 +1,18 @@
+{
+  "id": "error_offline_mid_reply",
+  "dp": 1,
+  "title": "Link drops 3 s into speech: ERROR then OFFLINE, link returns after 8 s, back to IDLE",
+  "start": "idle",
+  "note": "Assumes time scale 1: the store's 3.1 s ERROR timer is not scaled, so at 4x the link is back before ERROR ends and OFFLINE is skipped.",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Tell me about the weekend.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+1000", "op": "speak", "text": "The weekend looks mostly dry with a little drizzle on Sunday morning, so plan accordingly.", "ms": 10000},
+    {"after": "speech_start", "at": "+3000", "op": "fault", "kind": "offline", "ms": 8000},
+    {"at": "+300", "op": "expect", "orb": "error", "within_ms": 1000},
+    {"at": "+0", "op": "expect", "orb": "offline", "link": "offline", "within_ms": 6000},
+    {"at": "+0", "op": "expect", "orb": "idle", "link": "online", "call": "none", "within_ms": 12000}
+  ]
+}

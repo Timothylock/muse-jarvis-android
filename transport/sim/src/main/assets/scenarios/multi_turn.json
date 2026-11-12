@@ -1,0 +1,28 @@
+{
+  "id": "multi_turn",
+  "dp": 1,
+  "title": "3 turns in one call, standby between, idle-out after 45 s",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "First question.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1000},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "That was the first answer.", "ms": 1800},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500},
+    {"op": "await_ptt", "user_text": "Second question.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1000},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "And here is the second answer.", "ms": 1800},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500},
+    {"op": "await_ptt", "user_text": "Third question.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1000},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "Third answer, then I will wait quietly.", "ms": 1800},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500},
+    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 50000}
+  ]
+}

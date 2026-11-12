@@ -1,0 +1,20 @@
+{
+  "id": "sticky_overflow",
+  "dp": 1,
+  "title": "4 sticky pushes: only 3 fit, the oldest goes",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Pin four notes for me.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+600", "op": "speak", "text": "Pinning four notes.", "ms": 4000},
+    {"at": "+500", "op": "command", "name": "display.card", "params": {"id": "sticky-1", "title": "Sticky 1", "body": "Pinned note 1.", "sticky": true}},
+    {"at": "+500", "op": "command", "name": "display.card", "params": {"id": "sticky-2", "title": "Sticky 2", "body": "Pinned note 2.", "sticky": true}},
+    {"at": "+500", "op": "command", "name": "display.card", "params": {"id": "sticky-3", "title": "Sticky 3", "body": "Pinned note 3.", "sticky": true}},
+    {"at": "+500", "op": "command", "name": "display.card", "params": {"id": "sticky-4", "title": "Sticky 4", "body": "Pinned note 4.", "sticky": true}},
+    {"at": "+200", "op": "expect", "panel_count": 3, "panel_ids": ["sticky-2", "sticky-3", "sticky-4"]},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 3, "within_ms": 1500}
+  ]
+}

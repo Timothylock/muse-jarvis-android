@@ -1,0 +1,30 @@
+{
+  "id": "planning_outline",
+  "dp": 1,
+  "title": "List pushed while thinking, updated by id across 3 turns, final sticky",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Help me plan Saturday's trip to Orcas.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+700", "op": "command", "name": "display.list", "params": {"id": "trip-plan", "title": "Saturday · Orcas trip", "items": ["Book ferry", "Pack", "Confirm hotel"]}},
+    {"at": "+600", "op": "speak", "text": "Here is a rough plan. Shall I refine it?", "ms": 3000},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 1, "panel_ids": ["trip-plan"], "within_ms": 1500},
+    {"op": "await_ptt", "user_text": "Add the ferry time and what to pack.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+700", "op": "command", "name": "display.list", "params": {"id": "trip-plan", "title": "Saturday · Orcas trip", "items": [{"text": "Book ferry 07:40 Anacortes", "level": 0, "done": true}, {"text": "Pack", "level": 0}, {"text": "Chargers: tablet, phone", "level": 1}, {"text": "Rain jacket", "level": 1}, {"text": "Confirm hotel", "level": 0}]}},
+    {"at": "+600", "op": "speak", "text": "I added the ferry time and a packing sublist.", "ms": 3000},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 1, "panel_ids": ["trip-plan"], "within_ms": 1500},
+    {"op": "await_ptt", "user_text": "Pin it and add the hotel check-in time.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+700", "op": "command", "name": "display.list", "params": {"id": "trip-plan", "title": "Saturday · Orcas trip", "items": [{"text": "Book ferry 07:40 Anacortes", "level": 0, "done": true}, {"text": "Pack", "level": 0}, {"text": "Chargers: tablet, phone", "level": 1}, {"text": "Rain jacket", "level": 1}, {"text": "Confirm hotel check-in after 15:00", "level": 0}], "sticky": true}},
+    {"at": "+600", "op": "speak", "text": "Done. The plan is pinned.", "ms": 3000},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 1, "panel_ids": ["trip-plan"], "within_ms": 1500}
+  ]
+}

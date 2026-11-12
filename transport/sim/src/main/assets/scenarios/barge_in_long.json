@@ -1,0 +1,21 @@
+{
+  "id": "barge_in_long",
+  "dp": 1,
+  "title": "25 s reply; PTT pressed 6 s in (auto in unattended mode) flushes speech and listens",
+  "start": "idle",
+  "note": "Manual run: press PTT yourself at about 6 s into the reply (the log prints PRESS PTT NOW).",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Tell me a long story.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "Once upon a time a very small simulator wanted to tell a very long story, and nobody could stop it.", "ms": 25000},
+    {"after": "speech_start", "at": "+6000", "op": "ptt", "value": "down"},
+    {"after": "speech_end", "op": "expect", "orb": "listening", "within_ms": 500},
+    {"at": "+1500", "op": "ptt", "value": "up"},
+    {"after": "ptt_up", "op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "Okay, I stopped.", "ms": 1500},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500}
+  ]
+}

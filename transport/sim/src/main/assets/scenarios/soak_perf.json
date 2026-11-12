@@ -1,0 +1,20 @@
+{
+  "id": "soak_perf",
+  "dp": 1,
+  "title": "Manual soak: loops speaking + 3 panels forever (perf runs); no assertions",
+  "start": "idle",
+  "note": "Manual perf run (DESIGN 7.5: 10 min); no expects. Stop it from the drawer.",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Start the soak."},
+    {"after": "ptt_up", "op": "think", "ms": 500},
+    {"op": "turn_started"},
+    {"at": "+500", "op": "speak", "text": "This is a long running performance soak with speech and three panels on screen.", "ms": 8000},
+    {"at": "+500", "op": "command", "name": "display.card", "params": {"id": "soak-card", "title": "Soak card", "body": "Updated every loop."}},
+    {"at": "+300", "op": "command", "name": "display.stats", "params": {"id": "soak-stats", "title": "Soak stats", "metrics": [{"label": "A", "value": 1}, {"label": "B", "value": 2}, {"label": "C", "value": 3}]}},
+    {"at": "+300", "op": "command", "name": "display.list", "params": {"id": "soak-list", "title": "Soak list", "items": ["One", "Two", "Three", "Four"]}},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"op": "wait", "ms": 4000},
+    {"op": "loop", "to": 3}
+  ]
+}

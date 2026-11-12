@@ -1,0 +1,16 @@
+{
+  "id": "invalid_actions",
+  "dp": 1,
+  "title": "Malformed pushes: missing title, 7 metrics, 200-char label, unknown param, bad id, unknown command",
+  "start": "idle",
+  "note": "Expected replies: missing title and bad id rejected; 7 metrics and the long label accepted with truncated:true; unknown param accepted with ignored:[colour]; unknown command rejected. See the event log.",
+  "steps": [
+    {"at": "+0", "op": "command", "name": "display.card", "params": {"body": "No title here."}},
+    {"at": "+300", "op": "command", "name": "display.stats", "params": {"id": "inv-7", "title": "Seven metrics", "metrics": [{"label": "M1", "value": 1}, {"label": "M2", "value": 2}, {"label": "M3", "value": 3}, {"label": "M4", "value": 4}, {"label": "M5", "value": 5}, {"label": "M6", "value": 6}, {"label": "M7", "value": 7}]}},
+    {"at": "+300", "op": "command", "name": "display.stats", "params": {"id": "inv-label", "title": "Long label", "metrics": [{"label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL", "value": 1}]}},
+    {"at": "+300", "op": "command", "name": "display.card", "params": {"id": "inv-unknown", "title": "Unknown param", "colour": "red"}},
+    {"at": "+300", "op": "command", "name": "display.card", "params": {"id": "bad id!", "title": "Bad id"}},
+    {"at": "+300", "op": "command", "name": "display.bogus", "params": {"title": "Nope"}},
+    {"at": "+300", "op": "expect", "panel_count": 3, "panel_ids": ["inv-7", "inv-label", "inv-unknown"]}
+  ]
+}

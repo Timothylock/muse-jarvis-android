@@ -1,0 +1,17 @@
+{
+  "id": "call_takeover",
+  "dp": 1,
+  "title": "Remote end takes the call during STANDBY: caption 'Call moved to another device', IDLE",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Hi.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1000},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "Hello again.", "ms": 1500},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500},
+    {"at": "+800", "op": "call_takeover"},
+    {"at": "+300", "op": "expect", "orb": "idle", "call": "none", "within_ms": 1500}
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "panel_flood",
+  "dp": 1,
+  "title": "6 pushes in 4 s: eviction and collapse; the 11th within 5 s is rate limited",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Show me everything at once.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+500", "op": "speak", "text": "Flooding the display now.", "ms": 9000},
+    {"at": "+300", "op": "command", "name": "display.card", "params": {"id": "flood-1", "title": "Flood card 1", "body": "Rapid push 1."}},
+    {"at": "+800", "op": "command", "name": "display.card", "params": {"id": "flood-2", "title": "Flood card 2", "body": "Rapid push 2."}},
+    {"at": "+800", "op": "command", "name": "display.card", "params": {"id": "flood-3", "title": "Flood card 3", "body": "Rapid push 3."}},
+    {"at": "+800", "op": "command", "name": "display.card", "params": {"id": "flood-4", "title": "Flood card 4", "body": "Rapid push 4."}},
+    {"at": "+800", "op": "command", "name": "display.card", "params": {"id": "flood-5", "title": "Flood card 5", "body": "Rapid push 5."}},
+    {"at": "+800", "op": "command", "name": "display.card", "params": {"id": "flood-6", "title": "Flood card 6", "body": "Rapid push 6."}},
+    {"at": "+100", "op": "command", "name": "display.card", "params": {"id": "flood-7", "title": "Flood card 7", "body": "Rapid push 7."}},
+    {"at": "+100", "op": "command", "name": "display.card", "params": {"id": "flood-8", "title": "Flood card 8", "body": "Rapid push 8."}},
+    {"at": "+100", "op": "command", "name": "display.card", "params": {"id": "flood-9", "title": "Flood card 9", "body": "Rapid push 9."}},
+    {"at": "+100", "op": "command", "name": "display.card", "params": {"id": "flood-10", "title": "Flood card 10", "body": "Rapid push 10."}},
+    {"at": "+100", "op": "command", "name": "display.card", "params": {"id": "flood-11", "title": "Flood card 11", "body": "Rapid push 11."}},
+    {"at": "+200", "op": "expect", "panel_count": 3, "panel_ids": ["flood-10", "flood-9", "flood-8"]},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 3, "within_ms": 1500}
+  ]
+}

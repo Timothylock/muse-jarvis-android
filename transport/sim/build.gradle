@@ -11,11 +11,14 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = '17' }
+    testOptions { unitTests.returnDefaultValues = true }
 }
 dependencies {
     api project(':core:model')
     api project(':core:transport-api')
     implementation project(':core:store')
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:${rootProject.ext.coroutines}"
+    implementation "org.jetbrains.kotlinx:kotlinx-serialization-json:${rootProject.ext.serializationJson}"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:${rootProject.ext.coroutines}"
     testImplementation "junit:junit:${rootProject.ext.junit}"
 }

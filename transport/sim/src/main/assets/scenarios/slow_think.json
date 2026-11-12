@@ -1,0 +1,23 @@
+{
+  "id": "slow_think",
+  "dp": 1,
+  "title": "14 s thinking (turn_started, no idle-out), then a turn that hits the 60 s think timeout",
+  "start": "idle",
+  "note": "Think timeout is a store timer (60 s, not time-scaled): the second half takes about 65 s of real time.",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Do something complicated.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 14000},
+    {"op": "turn_started"},
+    {"at": "+14000", "op": "speak", "text": "Sorry for the wait. That was a slow one.", "ms": 2500},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500},
+    {"op": "await_ptt", "user_text": "Do something impossible.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 60000},
+    {"op": "turn_started"},
+    {"op": "expect", "orb": "error", "within_ms": 65000},
+    {"at": "+1000", "op": "speak", "text": "Sorry, that took far too long.", "ms": 2000},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "within_ms": 4000}
+  ]
+}

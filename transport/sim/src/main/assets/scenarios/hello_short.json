@@ -1,0 +1,16 @@
+{
+  "id": "hello_short",
+  "dp": 1,
+  "title": "Minimal turn: admission, think 1.2 s, speak 2 s, standby, idle-out at 45 s",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Hello there", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+1200", "op": "speak", "text": "Hello! This is the simulator. I am ready when you are.", "ms": 2000},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500},
+    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 50000}
+  ]
+}

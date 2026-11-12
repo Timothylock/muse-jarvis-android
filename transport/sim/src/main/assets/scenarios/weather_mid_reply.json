@@ -1,0 +1,16 @@
+{
+  "id": "weather_mid_reply",
+  "dp": 1,
+  "title": "Weather Q&A, stats push 1.2 s into speech",
+  "start": "idle",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"at": 0, "op": "await_ptt", "user_text": "What's the weather like today?"},
+    {"after": "ptt_up", "op": "think", "ms": 1800},
+    {"at": "+0", "op": "turn_started"},
+    {"at": "+1800", "op": "speak", "text": "It's twelve degrees now with a seventy percent chance of rain, clearing after noon.", "ms": 5200},
+    {"at": "+1200", "op": "command", "name": "display.stats", "params": {"id": "weather-today", "title": "Seattle · Today", "metrics": [{"label": "Now", "value": 12, "unit": "°C"}, {"label": "High", "value": 15, "unit": "°C"}, {"label": "Rain", "value": 70, "unit": "%"}, {"label": "Wind", "value": "14 SW", "unit": "km/h"}], "caption": "Clearing after 12:00"}},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "panel_count": 1, "panel_ids": ["weather-today"], "orb": "standby", "within_ms": 1500}
+  ]
+}

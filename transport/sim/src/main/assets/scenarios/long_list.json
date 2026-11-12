@@ -1,0 +1,19 @@
+{
+  "id": "long_list",
+  "dp": 1,
+  "title": "30-item list (max) scrolls during speech; 50-item push is rejected (see reply in log)",
+  "start": "idle",
+  "note": "The 50-item push is over the 1.5x tolerance (45), so the store replies 'items: max 30 items'; check the event log.",
+  "steps": [
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Give me a long checklist.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1200},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "Here is the full checklist. It has thirty items, so the panel scrolls while I read it out.", "ms": 14000},
+    {"at": "+1500", "op": "command", "name": "display.list", "params": {"id": "checklist", "title": "Moving checklist", "items": ["Checklist item 1", "Checklist item 2", "Checklist item 3", "Checklist item 4", "Checklist item 5", "Checklist item 6", "Checklist item 7", "Checklist item 8", "Checklist item 9", "Checklist item 10", "Checklist item 11", "Checklist item 12", "Checklist item 13", "Checklist item 14", "Checklist item 15", "Checklist item 16", "Checklist item 17", "Checklist item 18", "Checklist item 19", "Checklist item 20", "Checklist item 21", "Checklist item 22", "Checklist item 23", "Checklist item 24", "Checklist item 25", "Checklist item 26", "Checklist item 27", "Checklist item 28", "Checklist item 29", "Checklist item 30"], "ordered": true}},
+    {"at": "+2000", "op": "command", "name": "display.list", "params": {"id": "too-long", "title": "Rejected list", "items": ["Overflow item 1", "Overflow item 2", "Overflow item 3", "Overflow item 4", "Overflow item 5", "Overflow item 6", "Overflow item 7", "Overflow item 8", "Overflow item 9", "Overflow item 10", "Overflow item 11", "Overflow item 12", "Overflow item 13", "Overflow item 14", "Overflow item 15", "Overflow item 16", "Overflow item 17", "Overflow item 18", "Overflow item 19", "Overflow item 20", "Overflow item 21", "Overflow item 22", "Overflow item 23", "Overflow item 24", "Overflow item 25", "Overflow item 26", "Overflow item 27", "Overflow item 28", "Overflow item 29", "Overflow item 30", "Overflow item 31", "Overflow item 32", "Overflow item 33", "Overflow item 34", "Overflow item 35", "Overflow item 36", "Overflow item 37", "Overflow item 38", "Overflow item 39", "Overflow item 40", "Overflow item 41", "Overflow item 42", "Overflow item 43", "Overflow item 44", "Overflow item 45", "Overflow item 46", "Overflow item 47", "Overflow item 48", "Overflow item 49", "Overflow item 50"]}},
+    {"at": "+200", "op": "expect", "panel_count": 1, "panel_ids": ["checklist"]},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "panel_count": 1, "within_ms": 1500}
+  ]
+}
