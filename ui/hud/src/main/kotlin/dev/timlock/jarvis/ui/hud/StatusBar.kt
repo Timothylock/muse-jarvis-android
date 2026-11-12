@@ -37,6 +37,9 @@ fun linkColor(link: LinkState): Color = when (link) {
     LinkState.Unpaired, is LinkState.PairingLost -> JarvisColors.ErrRed
 }
 
+/** Right-edge clearance during a call, measured on the SM-T220 (proofs/m5-touch-hold.png). */
+private const val PRIVACY_PILL_CLEARANCE_PX = 96f
+
 /** 48 px status bar (§2.3). */
 @Composable
 fun StatusBar(
@@ -97,6 +100,8 @@ fun StatusBar(
                     contentAlignment = Alignment.Center,
                 ) { Text("END", style = JarvisType.StatusBar.style(JarvisColors.ErrRed)) }
             }
+            // Android's mic privacy pill (system UI, ~x 1240-1312, y 0-32 while capturing) would cover END; keep it clear.
+            Spacer(Modifier.width(px.dp(PRIVACY_PILL_CLEARANCE_PX)))
         } else {
             Text(date.uppercase(), style = base)
             Spacer(Modifier.width(px.dp(24f)))
