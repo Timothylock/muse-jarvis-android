@@ -17,6 +17,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import dev.timlock.jarvis.core.model.monoMillis
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,12 +54,14 @@ fun StatusBar(
     /** §7.7 test input: developer flag on / a test WAV is being injected. Amber chip (never violet). */
     testInputEnabled: Boolean = false,
     testInputActive: Boolean = false,
+    /** Tap on the gear glyph, or a long press (800 ms) anywhere on the bar, opens Settings (§4.5). */
+    onSettings: () -> Unit = {},
 ) {
     val px = LocalPx.current
     val inCall = callSinceMs != 0L
     val base = JarvisType.StatusBar.style(JarvisColors.TextSecondary)
     Row(
-        modifier.fillMaxWidth().height(px.dp(48f)).padding(horizontal = px.dp(50f)),
+        modifier.fillMaxWidth().height(px.dp(48f)).longPressObserver(800L, onSettings).padding(horizontal = px.dp(50f)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (mode == Mode.SIM) {
@@ -94,7 +100,10 @@ fun StatusBar(
         } else {
             Text(date.uppercase(), style = base)
             Spacer(Modifier.width(px.dp(24f)))
-            Text("⚙", style = base)
+            Box(
+                Modifier.height(px.dp(48f)).width(px.dp(56f)).clickable(onClick = onSettings),
+                contentAlignment = Alignment.Center,
+            ) { Text("⚙", style = base) }
         }
     }
 }
@@ -123,5 +132,23 @@ fun TestInputChip(active: Boolean, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.Center,
     ) {
         Text("TEST INPUT", style = JarvisType.StatusBar.style(if (active) amber else amber.copy(alpha = 0.7f)))
+    }
+}
+
+/** Fires [onLongPress] after [holdMs] of a stationary press; observes in the Initial pass and never consumes. */
+private fun Modifier.longPressObserver(holdMs: Long, onLongPress: () -> Unit): Modifier = pointerInput(holdMs) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val slop = viewConfiguration.touchSlop
+        val ended = withTimeoutOrNull(holdMs) {
+            var released = false
+            while (!released) {
+                val ev = awaitPointerEvent(PointerEventPass.Initial)
+                val c = ev.changes.firstOrNull { it.id == down.id }
+                released = c == null || !c.pressed || (c.position - down.position).getDistance() > slop
+            }
+            true
+        }
+        if (ended == null) onLongPress()
     }
 }

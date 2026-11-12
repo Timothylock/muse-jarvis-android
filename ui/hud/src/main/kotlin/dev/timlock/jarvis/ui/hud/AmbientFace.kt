@@ -1,6 +1,9 @@
 package dev.timlock.jarvis.ui.hud
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,9 +50,15 @@ fun AmbientFace(
     onHangUp: () -> Unit = {},
     testInputEnabled: Boolean = false,
     testInputActive: Boolean = false,
+    clock24h: Boolean = true,
+    /** §2.7 night dim: status bar and clock fade slightly (the orb and panels are handled elsewhere). */
+    night: Boolean = false,
+    onSettings: () -> Unit = {},
 ) {
     val px = LocalPx.current
     val now by rememberNow()
+    // One 1 s tween per night change; nothing animates per frame otherwise.
+    val dim by animateFloatAsState(if (night) 0.6f else 1f, tween(1000), label = "nightDim")
     Box(modifier.fillMaxSize()) {
         orb()
         // Orb PTT target (§4.3): the whole orb circle, immediate down/up, double-tap = hang up. Below the status bar,
@@ -67,22 +76,22 @@ fun AmbientFace(
             ),
         )
         StatusBar(
-            mode, link, now.timeText(), now.dateText(), Modifier.align(Alignment.TopStart), onSimChipClick,
+            mode, link, now.timeText(clock24h), now.dateText(), Modifier.align(Alignment.TopStart).graphicsLayer { alpha = dim }, onSimChipClick,
             callSinceMs = callSinceMs, stateWord = orbState.name, onEnd = onHangUp,
-            testInputEnabled = testInputEnabled, testInputActive = testInputActive,
+            testInputEnabled = testInputEnabled, testInputActive = testInputActive, onSettings = onSettings,
         )
 
         if (!hasDockedPanels) {
             // Clock: top-left of the content area (content starts at y=48).
             Text(
-                now.timeText(),
+                now.timeText(clock24h),
                 style = JarvisType.AmbientClock.style(JarvisColors.TextPrimary),
-                modifier = Modifier.offset(px.dp(50f), px.dp(60f)),
+                modifier = Modifier.offset(px.dp(50f), px.dp(60f)).graphicsLayer { alpha = dim },
             )
             Text(
                 now.dateText(),
                 style = JarvisType.HudLabel.copy(tracking = 0f).style(JarvisColors.TextSecondary),
-                modifier = Modifier.offset(px.dp(54f), px.dp(184f)),
+                modifier = Modifier.offset(px.dp(54f), px.dp(184f)).graphicsLayer { alpha = dim },
             )
         }
 

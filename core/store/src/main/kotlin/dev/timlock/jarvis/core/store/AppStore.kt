@@ -80,7 +80,7 @@ internal fun leadersFor(s: AppState): List<LeaderAnchor> {
     if (s.layout != OrbLayout.DOCKED) return emptyList()
     var top = 64
     val out = ArrayList<LeaderAnchor>(3)
-    for (p in PanelManager.dockPanels(s.panels.panels).take(PanelManager.MAX_PANELS)) {
+    for (p in PanelManager.dockPanels(s.panels.panels).take(s.config.maxPanels)) {
         val h = PanelHeights.estimatePx(p)
         out += LeaderAnchor(
             yPx = top + h / 2f, revealStartMs = p.revealStartMs,

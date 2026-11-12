@@ -25,11 +25,12 @@ import dev.timlock.jarvis.core.model.PanelPlacement
 import dev.timlock.jarvis.core.model.PanelStack
 import dev.timlock.jarvis.core.model.PanelType
 import dev.timlock.jarvis.core.model.TransportKind
+import dev.timlock.jarvis.core.model.UserConfig
 import dev.timlock.jarvis.core.transport.TransportEvent
 
 const val SIM_INTERSTITIAL_MS = 1500L
-const val THINK_TIMEOUT_MS = 60_000L
-const val STANDBY_WINDOW_MS = 45_000L
+const val THINK_TIMEOUT_MS = UserConfig.DEFAULT_THINK_TIMEOUT_MS
+const val STANDBY_WINDOW_MS = UserConfig.DEFAULT_STANDBY_MS
 /** 80 ms in + 600 ms red + 2.5 s amber (the phases are visual only). */
 const val ERROR_TOTAL_MS = 3_100L
 const val PTT_CAP_MS = 60_000L
@@ -153,10 +154,27 @@ private class Ctx(var s: AppState, val now: Long) {
         emit(Effect.ShowCaption(text, role, final))
     }
 
+    /** Default non-sticky lifetime for card/list panels (sticky-by-default is applied on arrival instead). */
+    val panelTtl: Long get() = s.config.panelTtlMs ?: UserConfig.DEFAULT_PANEL_TTL_MS
+
+    fun setConfig(cfg: UserConfig) {
+        val c = cfg.sanitized()
+        s = s.copy(config = c)
+        if (c.maxPanels < s.panels.panels.size) {
+            // Evict surplus panels: non-sticky oldest first, then oldest sticky.
+            var list = s.panels.panels
+            while (list.size > c.maxPanels) {
+                val victim = list.lastOrNull { !PanelManager.isSticky(it) } ?: list.last()
+                list = list.filter { it !== victim }
+            }
+            s = s.copy(panels = PanelManager.layout(s.panels.copy(panels = list)))
+        }
+    }
+
     fun fallbackActive(): Boolean = s.fallbackUntil?.let { now < it } == true
 
     fun enterThinking() {
-        s = s.copy(machine = THINKING, thinkDeadline = now + THINK_TIMEOUT_MS, standbyDeadline = null, settleDeadline = null)
+        s = s.copy(machine = THINKING, thinkDeadline = now + s.config.thinkTimeoutMs, standbyDeadline = null, settleDeadline = null)
     }
 
     fun enterSpeaking() {
@@ -168,7 +186,7 @@ private class Ctx(var s: AppState, val now: Long) {
         if (!callOpen) { goStable(); return }
         s = s.copy(
             machine = STANDBY, thinkDeadline = null, settleDeadline = null,
-            standbyDeadline = now + STANDBY_WINDOW_MS, countdownStartMs = now, countdownEndMs = now + STANDBY_WINDOW_MS,
+            standbyDeadline = now + s.config.standbyMs, countdownStartMs = now, countdownEndMs = now + s.config.standbyMs,
         )
     }
 
@@ -239,7 +257,7 @@ private class Ctx(var s: AppState, val now: Long) {
     /** Recompute expiries when the call opens or closes (§5.5: the call is the context). */
     fun lifetimes(wasOpen: Boolean) {
         if (wasOpen != callOpen) {
-            var p = PanelManager.applyLifetimes(s.panels, callOpen, now)
+            var p = PanelManager.applyLifetimes(s.panels, callOpen, now, panelTtl)
             if (wasOpen && !callOpen) p = PanelManager.demoteAtCallEnd(p, now) // H1: persistent panels become chips
             s = s.copy(panels = p)
         }
@@ -249,7 +267,7 @@ private class Ctx(var s: AppState, val now: Long) {
         goStable()
         if (callOpen) {
             // Call survives ERROR (think timeout): late reply can still play; keep the idle window ticking.
-            if (stableOrb(s) == IDLE) s = s.copy(standbyDeadline = now + STANDBY_WINDOW_MS) else teardown(hangUp = true)
+            if (stableOrb(s) == IDLE) s = s.copy(standbyDeadline = now + s.config.standbyMs) else teardown(hangUp = true)
         }
     }
 
@@ -297,11 +315,12 @@ private class Ctx(var s: AppState, val now: Long) {
             is Intent.PanelCount -> Unit // deprecated: panelCount is derived from the panel stack
             is Intent.DismissPanel -> s = s.copy(panels = PanelManager.dismiss(s.panels, input.id))
             is Intent.AcknowledgeTimer -> s = s.copy(panels = PanelManager.dismiss(s.panels, input.id))
-            is Intent.PinPanel -> s = s.copy(panels = PanelManager.pin(s.panels, input.id, input.pinned, now, callOpen))
+            is Intent.PinPanel -> s = s.copy(panels = PanelManager.pin(s.panels, input.id, input.pinned, now, callOpen, panelTtl, s.config.maxPanels))
             is Intent.ExpandPanel -> s = s.copy(panels = PanelManager.expand(s.panels, input.id))
             is Intent.RestorePanels -> restorePanels(input.stack)
             Intent.DisplayPulse -> s = s.copy(pulseAtMs = now)
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
+            is Intent.SetConfig -> setConfig(input.config)
             is Intent.SetNight -> s = s.copy(night = input.night)
             is Intent.SetPerfHud -> s = s.copy(perfHud = input.on)
             is Intent.SetTestInput -> s = s.copy(testInputEnabled = input.enabled, testInputActive = input.active)
@@ -480,7 +499,7 @@ private class Ctx(var s: AppState, val now: Long) {
             createdAtMs = now, updatedAtMs = now, sim = s.mode == Mode.SIM, textReply = true,
         )
         val before = s.panels.panels.firstOrNull { it.id == panel.id }
-        val next = PanelManager.upsert(s.panels, panel, now, callOpen, dockedBefore = s.layout == OrbLayout.DOCKED)
+        val next = PanelManager.upsert(s.panels, panel, now, callOpen, panelTtl, dockedBefore = s.layout == OrbLayout.DOCKED, maxPanels = s.config.maxPanels)
         val after = next.panels.first { it.id == panel.id }
         val arrived = before == null || before.placement != after.placement
         val pulse = if (arrived && after.placement == PanelPlacement.DOCK) after.revealStartMs + PanelManager.BRACKET_STAGE_MS else now
@@ -545,8 +564,8 @@ private class Ctx(var s: AppState, val now: Long) {
                 placement = if (callOpen) PanelPlacement.DOCK else PanelPlacement.CHIP,
                 revealStartMs = now - PanelManager.BRACKET_STAGE_MS,
             )
-        }.take(PanelManager.MAX_PANELS)
-        val restored = PanelManager.layout(PanelManager.applyLifetimes(PanelStack(keep), callOpen, now))
+        }.take(s.config.maxPanels)
+        val restored = PanelManager.layout(PanelManager.applyLifetimes(PanelStack(keep), callOpen, now, panelTtl))
         s = s.copy(panels = PanelManager.expire(restored, now).first)
     }
 
@@ -579,10 +598,10 @@ private class Ctx(var s: AppState, val now: Long) {
                 emit(Effect.ReplyCommand(e.invocationId, CommandResult.ok(DisplayValidator.clearPayload(v.id, n))))
             }
             is Validation.Show -> {
-                val panel = v.panel.copy(sim = s.mode == Mode.SIM)
+                val panel = v.panel.copy(sim = s.mode == Mode.SIM).let { if (s.config.panelTtlMs == null && it.type != PanelType.TIMER) it.copy(sticky = true) else it }
                 val before = s.panels.panels.firstOrNull { it.id == panel.id }
                 val dockedBefore = s.layout == OrbLayout.DOCKED
-                val next = PanelManager.upsert(s.panels, panel, now, callOpen, dockedBefore = dockedBefore)
+                val next = PanelManager.upsert(s.panels, panel, now, callOpen, panelTtl, dockedBefore = dockedBefore, maxPanels = s.config.maxPanels)
                 val after = next.panels.first { it.id == panel.id }
                 // C9: a DOCK arrival (or chip->dock promotion) pulses when the brackets pop, possibly in the future.
                 val arrived = before == null || before.placement != after.placement
