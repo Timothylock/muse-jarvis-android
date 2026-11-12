@@ -14,6 +14,7 @@ import kotlin.math.sqrt
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.cos
 
 /**
  * Turns (snapshot, audio, time) into the per-frame visual parameters the GL code draws.
@@ -44,6 +45,8 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
     var l4Alpha = 0f
     var coreScale = 1f; var coreInt = 0f
     val disp = FloatArray(32)
+    private val dispRaw = FloatArray(32)
+    private var sleepBreath = 0f
     var glint3 = 0f; var glint3Arc = 0; var glint5 = 0f
     var pulse = 0f; var attention = 0f
     var shakeX = 0f
@@ -56,6 +59,24 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
     // particles
     var partOrbit = 0f; var partRadOff = 0f; var partCount = 120f; var partBright = 0f; var partPull = 1f
     var timeSec = 0f
+    // M5: echo strength, speech bursts (C3), per-ring halo scalar (H7), wake/sleep reveal (C2), thinking sweeps (C11)
+    val echoStr = FloatArray(3)
+    val burstT = FloatArray(6) { -100f }
+    val burstS = FloatArray(6)
+    private var burstNext = 0
+    val haloMix = FloatArray(8) { 1f }
+    var haloSettling = false
+    private var haloInit = false
+    /** Per-layer reveal 0..1 (1 = steady state), head amount, see [Lyr]. */
+    val rev = FloatArray(Lyr.COUNT) { 1f }
+    val revHead = FloatArray(Lyr.COUNT)
+    var thinkMix = 0f; var sweep2Deg = 0f
+    var standbyMix = 0f; var l7Pulse = 0f
+    private var ambMode = 0 // 0 classic, 1 sleeping, 2 ambient, 3 waking
+    private var ambAt = 0L
+    private var ambInit = false
+    private var lastWant = false
+    private var cockPrev = 0f
 
     // ---- internal state ----
     private val from = FloatArray(P.N)
@@ -116,6 +137,9 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         } else if (sn.state != trackState || sn.sinceMs != trackSince) {
             cur.copyInto(from)
             durMs = StateTable.durationMs(trackState, sn.state); easeId = StateTable.easeId(trackState, sn.state)
+            // H11: barge-in, one last echo ring spawned at the cut so the interruption is seen
+            if (trackState == OrbState.SPEAKING && sn.state == OrbState.LISTENING) spawnEcho(nowMs, 1f)
+            cockPrev = 0f
             trackState = sn.state; trackSince = sn.sinceMs
         }
         val el = (nowMs - trackSince).toFloat()
@@ -128,8 +152,7 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         // ---- ambient (minimal) morph, OD1 lean (c) ----
         val auto = trackState == OrbState.IDLE && nowMs - trackSince >= AMBIENT_AFTER_MS && !isNight
         val wantMin = ambientOverride ?: auto
-        val step = dt / 1.5f
-        ambientMix = if (wantMin) min(1f, ambientMix + step) else max(0f, ambientMix - step)
+        ambient(nowMs, wantMin)
 
         // ---- audio ----
         bus.mic.read(micBuf); bus.out.read(outBuf)
@@ -138,7 +161,11 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         envOut += (outBuf[0] - envOut) * k
         val micW = cur[P.MIC_W]; val outW = cur[P.OUT_W]
         val onset = outBuf[1].toInt()
-        if (lastOnset >= 0 && onset != lastOnset && trackState == OrbState.SPEAKING) spawnEcho(nowMs)
+        if (lastOnset >= 0 && onset != lastOnset && trackState == OrbState.SPEAKING) {
+            val str = outBuf[2 + AudioLevels.BANDS].coerceIn(0f, 1f)
+            spawnEcho(nowMs, str)
+            spawnBurst(t, str)
+        }
         lastOnset = onset
         if (envOut > 0.08f) lastLoudMs = nowMs
         val relaxTarget = if (trackState == OrbState.SPEAKING && nowMs - lastLoudMs > 280) 0.3f else 1f
@@ -155,6 +182,19 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         rotL0 = wrap(rotL0 + 0.5f * (if (sn.state == OrbState.PAIRING) 0.2f else 1f) * dt)
         rotL1 = wrap(rotL1 + 2f * sp * (1f + 0.15f * nz(t, 0.3f)) * dt)
         rotL3 = wrap(rotL3 - 6f * sp * (1f + 0.15f * nz(t, 1.7f)) * dt)
+        // C6: on entering LISTENING, L3 cocks back 15 deg over 300 ms (ease-out-cubic) and then resumes turning
+        val stT = max(0f, (nowMs - trackSince) / 1000f)
+        if (trackState == OrbState.LISTENING) {
+            val x = 1f - min(1f, stT / 0.3f)
+            val cock = 15f * (1f - x * x * x)
+            rotL3 = wrap(rotL3 + (cock - cockPrev)); cockPrev = cock
+        }
+        // C11: second (counter) sweep in THINKING
+        thinkMix += ((if (trackState == OrbState.THINKING) 1f else 0f) - thinkMix) * min(1f, dt * 3f)
+        sweep2Deg = wrap(sweep2Deg - 240f * dt)
+        // H6: STANDBY awake pulse on L7 (0.5 Hz ease-in-out-sine)
+        standbyMix += ((if (trackState == OrbState.STANDBY) 1f else 0f) - standbyMix) * min(1f, dt * 3f)
+        l7Pulse = standbyMix * (0.5f - 0.5f * cos(TWO_PI * 0.5f * t))
         rotL4 = wrap(rotL4 + (11f * sp + cur[P.L4_ADD]) * (1f + 0.15f * nz(t, 2.9f)) * dt)
         rotL6 = wrap(rotL6 - 18f * sp * (1f + 0.15f * nz(t, 4.1f)) * dt)
         rotL7 = wrap(rotL7 + 4f * sp * (1f + 0.15f * nz(t, 5.3f)) * dt)
@@ -212,28 +252,38 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
             hot[i] = if (isNight) Palette.CyanBright[i] else Palette.CyanHot[i]
         }
 
-        // ---- layer visibility: state * boot draw-in * ambient fade ----
+        // ---- layer visibility: state * boot draw-in; ambient wake/sleep handled by [rev] (C2) ----
         gain = if (isNight) 0.35f else 1f
         val boot = ((nowMs - startMs) / BOOT_MS)
-        val fadeOut = 1f - ambientMix
         for (i in 0 until Lyr.COUNT) {
             val order = BOOT_ORDER[i]
-            val rev = ((boot - order * 0.065f) / 0.35f).coerceIn(0f, 1f)
-            var v = cur[P.VIS + i] * rev * rev * (3f - 2f * rev)
-            if (i == Lyr.GRID || i == Lyr.LABELS || i == Lyr.SEG || i == Lyr.CROWN || i == Lyr.DASH || i == Lyr.HUD) v *= fadeOut
-            layer[i] = v
+            val rv = ((boot - order * 0.065f) / 0.35f).coerceIn(0f, 1f)
+            layer[i] = cur[P.VIS + i] * rv * rv * (3f - 2f * rv)
         }
+        revealTimeline(nowMs)
+
+        // ---- H7: per-ring halo scalar eases at 1/s toward the tier's target ----
+        haloSettling = false
+        for (r in 1..7) {
+            val tg = if (tier.halo(r)) 1f else 0f
+            if (!haloInit) haloMix[r] = tg
+            else {
+                val d = tg - haloMix[r]
+                haloMix[r] = if (d > dt) haloMix[r] + dt else if (d < -dt) haloMix[r] - dt else tg
+                if (haloMix[r] != tg) haloSettling = true
+            }
+        }
+        haloInit = true
 
         // ---- core ----
         val breathK = cur[P.BREATH]
         val breath = sin(TWO_PI * t / 4f)
-        coreScale = (1f + 0.04f * breath * breathK) * (1f + 0.12f * env)
+        coreScale = (1f + 0.04f * breath * breathK) * (1f + 0.12f * env) * (1f + sleepBreath)
         coreInt = cur[P.CORE] + 0.05f * breath * breathK + cur[P.CORE_MIC] * envMic + cur[P.CORE_OUT] * outEff +
             cur[P.CORE_PULSE] * sin(TWO_PI * 1.6f * t)
 
-        // ---- L7 displacement ----
-        val maxPx = 12f * scale
-        val amp = 0.046f * radius
+        // ---- L7 displacement (C5): bipolar +-18 px (scaled) around 0.46 R from (band - 0.5)*2*env, 3-tap smoothed ----
+        val maxPx = 0.0692f * radius
         val gainReal = cur[P.L7_GAIN]; val syn = cur[P.L7_SYN]
         for (j in 0 until 32) {
             var f = j / 32f + phaseRev
@@ -242,14 +292,18 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
             val pos = m * 7f
             val i0 = min(pos.toInt(), 7); val i1 = min(i0 + 1, 7); val fr = pos - i0
             val bv = bands[i0] * (1f - fr) + bands[i1] * fr
-            val real = gainReal * bv * env
-            val s = 0.5f + 0.25f * sin(t * 1.3f + j * 0.9f) + 0.25f * sin(t * 0.77f - j * 1.7f)
-            disp[j] = min(amp * (real + syn * s), maxPx)
+            val real = gainReal * (bv - 0.5f) * 2f * env
+            val sv = 0.5f + 0.25f * sin(t * 1.3f + j * 0.9f) + 0.25f * sin(t * 0.77f - j * 1.7f)
+            dispRaw[j] = ((real + syn * (sv - 0.5f) * 2f * 0.25f) * maxPx).coerceIn(-maxPx, maxPx)
         }
+        for (j in 0 until 32) disp[j] = 0.25f * dispRaw[(j + 31) and 31] + 0.5f * dispRaw[j] + 0.25f * dispRaw[(j + 1) and 31]
 
         // ---- particles ----
-        val vel = cur[P.PVEL] + cur[P.PVEL_OUT] * outEff
-        partOrbit += sp * dt
+        // C6 gather: first 600 ms of LISTENING, radial -40 px/s (settles to -8), tangential x1.6, ease-out
+        var gw = 0f
+        if (trackState == OrbState.LISTENING && stT < 0.6f) { val x = 1f - stT / 0.6f; gw = x * x }
+        val vel = cur[P.PVEL] + cur[P.PVEL_OUT] * outEff - 32f * gw
+        partOrbit += sp * (1f + 0.6f * gw) * dt
         partRadOff = (partRadOff + vel / max(radius, 1f) * dt) % 1.1f
         if (partRadOff < 0f) partRadOff += 1.1f
         partBright = cur[P.PBR] + cur[P.PBR_OUT] * outEff
@@ -261,14 +315,88 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         partCount = if (dir > stepC) partCount + stepC else if (dir < -stepC) partCount - stepC else target
     }
 
-    private fun spawnEcho(nowMs: Long) {
+    private fun spawnEcho(nowMs: Long, strength: Float) {
         var slot = -1; var oldest = Long.MAX_VALUE
         for (i in 0 until 3) {
             if (echoStart[i] < 0 || nowMs - echoStart[i] > ECHO_MS) { slot = i; break }
             if (echoStart[i] < oldest) { oldest = echoStart[i]; slot = i }
         }
         echoStart[slot] = nowMs
+        echoStr[slot] = strength
     }
+
+    /** C3: round-robin one of 6 burst slots (16 motes each, all motion in the vertex shader). */
+    private fun spawnBurst(tSec: Float, strength: Float) {
+        burstT[burstNext] = tSec; burstS[burstNext] = max(0.35f, strength)
+        burstNext = (burstNext + 1) % 6
+    }
+
+    private fun q4(x: Float): Float { val c = x.coerceIn(0f, 1f); val i = 1f - c; return 1f - i * i * i * i }
+    private fun c01(x: Float) = x.coerceIn(0f, 1f)
+
+    /** Ambient state machine (C2). 0 classic, 1 sleeping (2.5 s outside-in), 2 minimal ambient, 3 waking (650 ms draw-in). */
+    private fun ambient(nowMs: Long, want: Boolean) {
+        if (!ambInit) { ambInit = true; lastWant = want; ambMode = if (want) 2 else 0 }
+        else if (want != lastWant) {
+            lastWant = want; ambAt = nowMs
+            ambMode = if (want) 1 else if (ambMode == 0) 0 else 3
+        }
+        val tm = (nowMs - ambAt).toFloat()
+        if (ambMode == 1 && tm >= SLEEP_MS) ambMode = 2
+        if (ambMode == 3 && tm >= WAKE_MS) ambMode = 0
+        ambientMix = when (ambMode) { 1 -> tm / SLEEP_MS; 2 -> 1f; 3 -> 1f - tm / WAKE_MS; else -> 0f }.coerceIn(0f, 1f)
+    }
+
+    private var labelsA = 1f; private var hudA = 1f
+    val sleeping: Boolean get() = ambMode == 1
+
+    /** Fills [rev]/[revHead] and gates the ambient-hidden layers. Wake: L7 0, L6 60, L5 120, L3 180, L1 ticks 240, grid+labels 300 ms. */
+    private fun revealTimeline(nowMs: Long) {
+        for (i in 0 until Lyr.COUNT) { rev[i] = 1f; revHead[i] = 0f }
+        labelsA = 1f; hudA = 1f; sleepBreath = 0f
+        val tm = (nowMs - ambAt).toFloat()
+        when (ambMode) {
+            2 -> {
+                rev[Lyr.SEG] = 0f; rev[Lyr.CROWN] = 0f; rev[Lyr.DASH] = 0f; rev[Lyr.GRID] = 0f
+                labelsA = 0f; hudA = 0f
+            }
+            3 -> {
+                rev[Lyr.REACT] = q4((tm - 0f) / 250f)
+                rev[Lyr.DASH] = q4((tm - 60f) / 250f)
+                rev[Lyr.CROWN] = q4((tm - 120f) / 250f)
+                rev[Lyr.SEG] = q4((tm - 180f) / 250f)
+                rev[Lyr.BEZEL] = q4((tm - 240f) / 400f)
+                rev[Lyr.GRID] = q4((tm - 300f) / 350f)
+                labelsA = c01((tm - 300f) / 250f); hudA = labelsA
+                for (i in WAKE_LAYERS) {
+                    val r = rev[i]
+                    revHead[i] = if (r >= 1f || r <= 0f) 0f else 1f - smooth(0.85f, 1f, r)
+                    if (r <= 0f) revHead[i] = 0f
+                }
+                // L1 ticks and L7 are visible in ambient: only a head pass, no mask
+            }
+            1 -> {
+                // outside-in: grid contracts, crown ticks drop out in random order, L3 then L6 arcs shorten from their tails
+                rev[Lyr.GRID] = 1f - smoothIO(tm / 700f)
+                labelsA = 1f - c01(tm / 400f); hudA = labelsA
+                rev[Lyr.CROWN] = 1f - c01((tm - 300f) / 900f)
+                rev[Lyr.SEG] = 1f - smoothIO((tm - 900f) / 800f)
+                rev[Lyr.DASH] = 1f - smoothIO((tm - 1300f) / 800f)
+                val x = c01((tm - 1900f) / 600f)
+                sleepBreath = 0.06f * sin(PI.toFloat() * x)
+            }
+        }
+        // hidden layers draw nothing
+        if (rev[Lyr.GRID] < 0.01f) layer[Lyr.GRID] = 0f
+        if (rev[Lyr.SEG] <= 0.001f) layer[Lyr.SEG] = 0f
+        if (rev[Lyr.CROWN] <= 0.001f) layer[Lyr.CROWN] = 0f
+        if (rev[Lyr.DASH] <= 0.001f) layer[Lyr.DASH] = 0f
+        layer[Lyr.LABELS] *= labelsA
+        layer[Lyr.HUD] *= hudA
+    }
+
+    private fun smooth(a: Float, b: Float, x: Float): Float { val t = c01((x - a) / (b - a)); return t * t * (3f - 2f * t) }
+    private fun smoothIO(x: Float): Float { val t = c01(x); return t * t * (3f - 2f * t) }
 
     private fun spring(i: Int, target: Float, w: Float, z: Float, h: Float) {
         val a = w * w * (target - sp6[i]) - 2f * z * w * sv6[i]
@@ -390,6 +518,9 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         const val AMBIENT_AFTER_MS = 120_000L
         const val BOOT_MS = 1400f
         const val ECHO_MS = 700L
+        private val WAKE_LAYERS = intArrayOf(Lyr.REACT, Lyr.DASH, Lyr.CROWN, Lyr.SEG, Lyr.BEZEL)
+        const val SLEEP_MS = 2500f
+        const val WAKE_MS = 700f
         const val SPRING_W = 14f
         const val CORE_ZETA = 0.85f
         const val OUTER_ZETA = 0.70f

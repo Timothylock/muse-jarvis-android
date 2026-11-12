@@ -16,10 +16,7 @@ import dev.timlock.jarvis.core.model.OrbState.SPEAKING
 import dev.timlock.jarvis.core.model.OrbState.STANDBY
 import dev.timlock.jarvis.core.model.OrbState.THINKING
 import dev.timlock.jarvis.core.model.OrbState.UNPAIRED
-import dev.timlock.jarvis.core.model.Caption
 import dev.timlock.jarvis.core.model.CommandResult
-import dev.timlock.jarvis.core.model.Panel
-import dev.timlock.jarvis.core.model.Role
 import dev.timlock.jarvis.core.model.PanelContent
 import dev.timlock.jarvis.core.model.PanelPlacement
 import dev.timlock.jarvis.core.model.PanelStack
@@ -45,19 +42,6 @@ const val REASON_SESSION_DEAD = "session_dead"
 const val CAPTION_OFFLINE = "Offline — reconnecting"
 const val CAPTION_TAKEOVER = "Call moved to another device"
 const val CAPTION_SLOW = "Muse is taking too long"
-const val CAPTION_FALLBACK = "Couldn't reach Muse's voice — trying text"
-const val CAPTION_FALLBACK_ERROR = "Couldn't send that — try again"
-/** Captions clear this long after the call goes idle (§2.5). */
-const val CAPTION_FADE_MS = 8_000L
-/** C10 typewriter speed; the reducer uses it only to continue partials without re-typing (the UI types at the same rate). */
-const val CAPTION_CPS = 60L
-/** §4.3.1: this many realtime admission failures within [FALLBACK_WINDOW_MS] switch PTT to the fallback path for that long. */
-const val FALLBACK_FAILURES = 2
-const val FALLBACK_WINDOW_MS = 600_000L
-/** SPEAKING-lite for a text-only fallback reply. */
-const val SPEAKING_LITE_MS_PER_WORD = 60L
-const val TEXT_REPLY_PANEL_ID = "text-reply"
-private const val TEXT_REPLY_MAX_CHARS = 400
 
 private val TAKEOVER_MARKERS = listOf("takeover", "taken_over", "another_device", "moved")
 private val ACTIVE = setOf(CONNECTING, LISTENING, THINKING, SPEAKING, STANDBY)
@@ -124,7 +108,6 @@ private class Ctx(var s: AppState, val now: Long) {
         if (callOpen || s.ptt != PttState.Up) emit(Effect.MicStop)
         s = s.copy(
             call = CallStatus.None, ptt = PttState.Up, turnInFlight = false, sinkPlaying = false,
-            callSinceMs = 0L, fallbackTurn = false,
             thinkDeadline = null, standbyDeadline = null, settleDeadline = null, pttCapAt = null, pttWarnAt = null,
         )
     }
@@ -134,26 +117,11 @@ private class Ctx(var s: AppState, val now: Long) {
         s = s.copy(
             machine = ERROR, priorStable = stableOrb(s), errorDeadline = now + ERROR_TOTAL_MS,
             thinkDeadline = null, standbyDeadline = null, settleDeadline = null,
-            pttCapAt = null, pttWarnAt = null, ptt = PttState.Up, fallbackTurn = false,
+            pttCapAt = null, pttWarnAt = null, ptt = PttState.Up,
         )
         emit(Effect.Earcon(EarconKind.ERROR))
-        caption?.let { setCaption(it, null, true) }
+        caption?.let { emit(Effect.ShowCaption(it)) }
     }
-
-    /** Sets [AppState.caption] (and keeps emitting [Effect.ShowCaption]). Partials that extend the previous partial continue typing (C10). */
-    fun setCaption(text: String, role: Role?, final: Boolean) {
-        val prev = s.caption
-        val r = if (role == Role.SYSTEM) null else role
-        var at = now
-        if (prev != null && prev.role == r && !prev.final && text.startsWith(prev.text)) {
-            val typed = minOf(prev.text.length.toLong(), (now - prev.atMs).coerceAtLeast(0) * CAPTION_CPS / 1000)
-            at = now - typed * 1000 / CAPTION_CPS
-        }
-        s = s.copy(caption = Caption(text, r, final, at), captionClearAt = null)
-        emit(Effect.ShowCaption(text, role, final))
-    }
-
-    fun fallbackActive(): Boolean = s.fallbackUntil?.let { now < it } == true
 
     fun enterThinking() {
         s = s.copy(machine = THINKING, thinkDeadline = now + THINK_TIMEOUT_MS, standbyDeadline = null, settleDeadline = null)
@@ -180,14 +148,13 @@ private class Ctx(var s: AppState, val now: Long) {
         emit(Effect.Haptic(HapticKind.TICK))
         emit(Effect.Earcon(EarconKind.CHIRP))
         emit(Effect.MicStart)
-        if (target == LISTENING && !s.fallbackTurn) emit(Effect.MicLive)
+        if (target == LISTENING) emit(Effect.MicLive)
     }
 
     // ---- deadlines ----------------------------------------------------------------------
 
     fun expire() {
         expirePanels()
-        s.captionClearAt?.takeIf { it <= now }?.let { s = s.copy(captionClearAt = null, caption = null) }
         s.pttWarnAt?.takeIf { it <= now }?.let {
             s = s.copy(pttWarnAt = null)
             if (s.ptt != PttState.Up) emit(Effect.Haptic(HapticKind.TICK))
@@ -302,7 +269,7 @@ private class Ctx(var s: AppState, val now: Long) {
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
             is Intent.SetNight -> s = s.copy(night = input.night)
             is Intent.SetPerfHud -> s = s.copy(perfHud = input.on)
-            is Intent.FallbackResult -> fallbackResult(input)
+            is Intent.FallbackResult -> Unit // TODO(M5 store track)
             is Event -> event(input.event)
         }
     }
@@ -333,16 +300,12 @@ private class Ctx(var s: AppState, val now: Long) {
         when (m) {
             OFFLINE -> {
                 s = s.copy(shakeAtMs = now)
-                setCaption(CAPTION_OFFLINE, null, true)
+                emit(Effect.ShowCaption(CAPTION_OFFLINE))
             }
             IDLE -> when (s.call) {
                 CallStatus.Ready -> startTalk(LISTENING)
                 CallStatus.Admitting -> startTalk(CONNECTING)
-                CallStatus.None -> if (fallbackActive()) {
-                    // §4.3.1: no call on the fallback path; the mic just buffers the utterance.
-                    s = s.copy(fallbackTurn = true)
-                    startTalk(LISTENING)
-                } else {
+                CallStatus.None -> {
                     startTalk(CONNECTING)
                     s = s.copy(call = CallStatus.Admitting)
                     emit(Effect.OpenCall)
@@ -351,8 +314,7 @@ private class Ctx(var s: AppState, val now: Long) {
             STANDBY -> startTalk(LISTENING)
             SPEAKING -> {
                 emit(Effect.BargeIn)
-                s = s.copy(sinkPlaying = false, turnInFlight = false, settleDeadline = null)
-                if (s.call == CallStatus.None && fallbackActive()) s = s.copy(fallbackTurn = true)
+                s = s.copy(sinkPlaying = false, turnInFlight = false)
                 startTalk(LISTENING)
             }
             else -> Unit // BOOT, UNPAIRED, PAIRING, CONNECTING, LISTENING, THINKING, ERROR
@@ -373,22 +335,13 @@ private class Ctx(var s: AppState, val now: Long) {
         s = s.copy(ptt = PttState.Up, pttCapAt = null, pttWarnAt = null)
         if (m == LISTENING) {
             enterThinking()
-            if (s.fallbackTurn) {
-                emit(Effect.FallbackSend)
-                emit(Effect.MicStop)
-            } else {
-                emit(Effect.MicSilence)
-                emit(Effect.MicStopAfter(MIC_TAIL_MS))
-            }
+            emit(Effect.MicSilence)
+            emit(Effect.MicStopAfter(MIC_TAIL_MS))
         }
     }
 
     fun callReady() {
-        // A realtime success resets the fallback bookkeeping (§4.3.1).
-        s = s.copy(
-            callSinceMs = if (s.call == CallStatus.Ready) s.callSinceMs else now,
-            call = CallStatus.Ready, admitFailures = emptyList(), fallbackUntil = null,
-        )
+        s = s.copy(call = CallStatus.Ready)
         if (m != CONNECTING) return
         emit(Effect.MicLive)
         if (s.ptt == PttState.Up) {
@@ -404,94 +357,21 @@ private class Ctx(var s: AppState, val now: Long) {
     fun callEnded(reason: String) {
         if (!callOpen) return
         val wasAdmitting = s.call == CallStatus.Admitting
-        val pttBefore = s.ptt
-        val pttSince = (pttBefore as? PttState.Held)?.sinceMs ?: now
         teardown(hangUp = false)
         val live = m in ACTIVE || m == IDLE
         val lower = reason.lowercase()
         when {
             TAKEOVER_MARKERS.any { lower.contains(it) } -> {
-                setCaption(CAPTION_TAKEOVER, null, true)
+                emit(Effect.ShowCaption(CAPTION_TAKEOVER))
                 if (m in ACTIVE || m == ERROR) goStable()
             }
-            wasAdmitting -> {
-                recordAdmitFailure()
-                if (live && fallbackActive()) startFallbackAfterFailure(pttBefore, pttSince) else if (live) enterError(null)
-            }
-            reason == REASON_SESSION_DEAD -> if (live) enterError(null)
+            reason == REASON_SESSION_DEAD || wasAdmitting -> if (live) enterError(null) // TODO(M5): fallback caption
             else -> if (m in ACTIVE) goStable() // remote stop / idle timeout
         }
     }
 
-    /** §4.3.1: [FALLBACK_FAILURES] admission failures within [FALLBACK_WINDOW_MS] switch to the fallback path for that long. */
-    fun recordAdmitFailure() {
-        val recent = s.admitFailures.filter { now - it < FALLBACK_WINDOW_MS } + now
-        s = s.copy(admitFailures = recent)
-        if (recent.size >= FALLBACK_FAILURES) s = s.copy(fallbackUntil = now + FALLBACK_WINDOW_MS)
-    }
-
-    /** Admission failed and fallback applies: keep/redo the utterance via chat + TTS instead of ERROR. */
-    fun startFallbackAfterFailure(ptt: PttState, heldSince: Long) {
-        setCaption(CAPTION_FALLBACK, null, true)
-        s = s.copy(fallbackTurn = true)
-        // teardown() requested MicStop; the buffered utterance must survive until FallbackSend / release.
-        fx.removeAll { it == Effect.MicStop }
-        if (ptt != PttState.Up) {
-            // Still talking: keep buffering on the fallback path, PttUp sends.
-            s = s.copy(ptt = ptt, pttCapAt = heldSince + PTT_CAP_MS, pttWarnAt = heldSince + PTT_WARN_MS)
-            go(LISTENING)
-        } else {
-            enterThinking()
-            emit(Effect.FallbackSend)
-            emit(Effect.MicStop)
-        }
-    }
-
-    fun fallbackResult(r: Intent.FallbackResult) {
-        if (!s.fallbackTurn || (m != THINKING && m != SPEAKING)) return // stale (think timeout, hang-up, new turn)
-        s = s.copy(fallbackTurn = false)
-        val text = r.replyText?.takeIf { it.isNotBlank() }
-        if (m == SPEAKING) { // audio started before the result arrived
-            text?.let { setCaption(it, Role.MUSE, true) }
-            return
-        }
-        when {
-            r.error != null -> enterError(CAPTION_FALLBACK_ERROR)
-            r.hasAudio -> text?.let { setCaption(it, Role.MUSE, true) } // wait for SinkFirstAudible / SinkDrained
-            text == null -> enterStandby() // empty turn -> stable state (no call on this path)
-            else -> textOnlyReply(text)
-        }
-    }
-
-    /** Fallback text-only reply (§4.3.1 step 4): caption + local "text reply" card + SPEAKING-lite (60 ms/word). Never logged. */
-    fun textOnlyReply(text: String) {
-        setCaption(text, Role.MUSE, true)
-        val body = if (text.length > TEXT_REPLY_MAX_CHARS) text.take(TEXT_REPLY_MAX_CHARS - 1).trimEnd() + "…" else text
-        val panel = Panel(
-            id = TEXT_REPLY_PANEL_ID, type = PanelType.CARD, title = "MUSE", content = PanelContent.Card(body = body),
-            createdAtMs = now, updatedAtMs = now, sim = s.mode == Mode.SIM, textReply = true,
-        )
-        val before = s.panels.panels.firstOrNull { it.id == panel.id }
-        val next = PanelManager.upsert(s.panels, panel, now, callOpen, dockedBefore = s.layout == OrbLayout.DOCKED)
-        val after = next.panels.first { it.id == panel.id }
-        val arrived = before == null || before.placement != after.placement
-        val pulse = if (arrived && after.placement == PanelPlacement.DOCK) after.revealStartMs + PanelManager.BRACKET_STAGE_MS else now
-        s = s.copy(panels = next, pulseAtMs = pulse)
-        enterSpeaking()
-        val words = text.trim().split(Regex("\\s+")).size.coerceAtLeast(1)
-        s = s.copy(settleDeadline = now + words * SPEAKING_LITE_MS_PER_WORD)
-    }
-
     fun hangUp() {
-        if (!callOpen) {
-            // Fallback path has no call: a double-tap while talking cancels the buffered utterance.
-            if (s.fallbackTurn && m == LISTENING) {
-                s = s.copy(ptt = PttState.Up, pttCapAt = null, pttWarnAt = null, fallbackTurn = false)
-                emit(Effect.MicStop)
-                goStable()
-            }
-            return
-        }
+        if (!callOpen) return
         teardown(hangUp = true)
         if (m in ACTIVE) goStable()
     }
@@ -500,10 +380,7 @@ private class Ctx(var s: AppState, val now: Long) {
         s = s.copy(sinkPlaying = true, settleDeadline = null)
         when (m) {
             THINKING -> enterSpeaking()
-            // H19 (kept deliberately): while a call is open, audible reply frames arriving in ERROR (late reply after the
-            // think timeout), STANDBY or IDLE (server-initiated / unsolicited speech) move the orb to SPEAKING even though
-            // the §3.1 diagram has no such edge; hiding speech the user can hear would be worse than the extra edge.
-            ERROR, STANDBY, IDLE -> if (callOpen) enterSpeaking()
+            ERROR, STANDBY, IDLE -> if (callOpen) enterSpeaking() // late reply after think timeout / unsolicited speech
             else -> Unit
         }
     }
@@ -518,7 +395,7 @@ private class Ctx(var s: AppState, val now: Long) {
                 s = s.copy(turnInFlight = false)
                 if (m == THINKING && !s.sinkPlaying) enterStandby() // text-only / empty turn
             }
-            is TransportEvent.Transcript -> setCaption(e.text, e.role, e.final)
+            is TransportEvent.Transcript -> emit(Effect.ShowCaption(e.text, e.role, e.final))
             is TransportEvent.AdvisoryError -> s = s.copy(advisoryErrors = e.count)
             is TransportEvent.Command -> command(e)
             is TransportEvent.Diagnostic -> Unit
@@ -606,14 +483,6 @@ private class Ctx(var s: AppState, val now: Long) {
             else -> s.layoutReturnAt ?: (now + LAYOUT_RETURN_MS)
         }
         s = if (target != s.layout) s.copy(layout = target, layoutSinceMs = now, layoutReturnAt = ret) else s.copy(layoutReturnAt = ret)
-        // Captions fade 8 s after the call goes idle; never while a call is open or a turn is active.
-        if (s.caption == null) {
-            if (s.captionClearAt != null) s = s.copy(captionClearAt = null)
-        } else if (callOpen || m in ACTIVE) {
-            if (s.captionClearAt != null) s = s.copy(captionClearAt = null)
-        } else if (s.captionClearAt == null) {
-            s = s.copy(captionClearAt = now + CAPTION_FADE_MS)
-        }
         // Displayed orb: forced override (sim) or the machine.
         val shown = s.forcedOrb ?: s.machine
         if (shown != s.orbState) s = s.copy(orbPrevious = s.orbState, orbState = shown, orbStateSince = now)

@@ -1,23 +1,14 @@
 {
   "id": "admission_fails",
   "dp": 1,
-  "title": "Two admission timeouts: ERROR once, then the fallback (text) path takes the second utterance and the third turn",
+  "title": "Call never becomes ready (35 s, shortened by the time scale): ERROR, then IDLE",
   "start": "idle",
+  "note": "Fallback chat+TTS assertions come in M5; this exercises the admit_timeout fault and the ERROR -> IDLE path that exists now.",
   "steps": [
     {"at": 0, "op": "fault", "kind": "admit_timeout"},
     {"op": "await_ptt", "user_text": "Anyone there?"},
     {"op": "expect", "orb": "connecting", "call": "admitting", "within_ms": 2000},
     {"op": "expect", "orb": "error", "within_ms": 40000},
-    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 5000},
-    {"op": "fault", "kind": "admit_timeout"},
-    {"op": "await_ptt", "user_text": "Hello? Anyone?"},
-    {"op": "expect", "orb": "connecting", "call": "admitting", "within_ms": 2000},
-    {"op": "expect", "orb": "thinking", "call": "none", "within_ms": 40000},
-    {"op": "expect", "orb": "speaking", "call": "none", "within_ms": 10000},
-    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 15000},
-    {"op": "await_ptt", "user_text": "Third time lucky."},
-    {"op": "expect", "orb": "listening", "call": "none", "within_ms": 2000},
-    {"op": "expect", "orb": "speaking", "call": "none", "within_ms": 10000},
-    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 15000}
+    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 5000}
   ]
 }

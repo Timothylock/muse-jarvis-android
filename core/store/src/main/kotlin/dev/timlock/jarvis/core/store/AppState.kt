@@ -74,14 +74,6 @@ data class AppState(
     val caption: dev.timlock.jarvis.core.model.Caption? = null,
     /** When the current call became Ready (status bar CALL mm:ss), 0 = no call. */
     val callSinceMs: Long = 0L,
-    /** Monotonic ms at which the caption is cleared (8 s after the call goes idle), or null. */
-    val captionClearAt: Long? = null,
-    /** Realtime admission failure times within the last 10 min (§4.3.1). */
-    val admitFailures: List<Long> = emptyList(),
-    /** While now < this, PTT uses the fallback path (chat + TTS); null = realtime. */
-    val fallbackUntil: Long? = null,
-    /** The current turn is on the fallback path (mic buffers; FallbackSend on release). */
-    val fallbackTurn: Boolean = false,
 ) {
     /** Derived: number of panels in [panels]. */
     val panelCount: Int get() = panels.panels.size
@@ -93,7 +85,7 @@ data class AppState(
 
     /** Earliest pending deadline, for scheduling a Tick. */
     fun nextDeadline(): Long? = (
-        listOfNotNull(thinkDeadline, standbyDeadline, errorDeadline, pttCapAt, pttWarnAt, settleDeadline, layoutReturnAt, captionClearAt) +
+        listOfNotNull(thinkDeadline, standbyDeadline, errorDeadline, pttCapAt, pttWarnAt, settleDeadline, layoutReturnAt) +
             panels.panels.mapNotNull { it.expiresAtMs } +
             panels.panels.mapNotNull { (it.content as? dev.timlock.jarvis.core.model.PanelContent.Timer)?.takeIf { t -> !t.chimed }?.endsAtMs }
         ).minOrNull()
