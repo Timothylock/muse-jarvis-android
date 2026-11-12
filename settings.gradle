@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = 'muse-jarvis-android'
-include ':app', ':core:model', ':core:transport-api', ':core:store', ':transport:sim', ':ui:hud', ':render:orb', ':audio'
+include ':app', ':core:model', ':core:transport-api', ':core:store', ':transport:sim', ':ui:hud', ':render:orb'

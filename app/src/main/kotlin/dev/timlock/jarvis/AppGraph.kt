@@ -4,9 +4,6 @@ import android.content.Context
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.util.Log
-import dev.timlock.jarvis.audio.Earcons
-import dev.timlock.jarvis.audio.MicSource
-import dev.timlock.jarvis.audio.Player
 import dev.timlock.jarvis.core.model.AudioVisualBus
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbStateHolder
@@ -14,7 +11,6 @@ import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.AppStore
 import dev.timlock.jarvis.core.store.EarconKind
 import dev.timlock.jarvis.core.store.Effect
-import dev.timlock.jarvis.core.store.HapticKind
 import dev.timlock.jarvis.core.transport.GadgetTransport
 import dev.timlock.jarvis.core.store.toOrbSnapshot
 import dev.timlock.jarvis.core.model.PerfHudData
@@ -29,8 +25,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** App-lifetime singletons (manual wiring, no DI). Started from [JarvisApp.onCreate]. */
@@ -42,14 +36,7 @@ object AppGraph {
     val audioBus = AudioVisualBus()
 
     private val levels = SyntheticLevels(audioBus)
-    private lateinit var calls: CallController
-    private lateinit var mic: MicSource
-    private lateinit var earcons: Earcons
-
-    private val _needsMicPermission = MutableStateFlow(false)
-    /** True while the app wants RECORD_AUDIO and does not have it; MainActivity's helper requests it (§4.1 step 4). */
-    val needsMicPermission: StateFlow<Boolean> = _needsMicPermission.asStateFlow()
-    fun markMicPermissionRequested() { _needsMicPermission.value = false }
+    private val calls = CallController(scope, { transport }) { store.dispatch(it) }
     private val _perf = MutableStateFlow(PerfHudData())
     val perfHud: StateFlow<PerfHudData> = _perf.asStateFlow()
     lateinit var simController: SimController
@@ -63,32 +50,17 @@ object AppGraph {
     fun start(context: Context) {
         if (started) return
         started = true
-        val app = context.applicationContext
-        mic = MicSource(app, audioBus) { _needsMicPermission.value = true }
-        earcons = Earcons(app)
-        calls = CallController(scope, { transport }, mic, Player(audioBus)) { store.dispatch(it) }
         simController = SimController(context.applicationContext, store, scope) { transport as? SimTransport }
         simController.start()
         // Orb snapshot for the GL thread on every state change.
         scope.launch { store.state.collect { orbHolder.snapshot = toOrbSnapshot(it) } }
-        // Contextual RECORD_AUDIO request on entering sim mode (§4.1 step 4); the first PTT press also asks (MicSource).
-        scope.launch {
-            store.state.map { it.mode }.distinctUntilChanged().collect { m ->
-                if (m == Mode.SIM && !mic.hasPermission()) _needsMicPermission.value = true
-            }
-        }
-        // Effects: log names only (never caption text).
+        // Effects are not executed by a transport yet (M5): log names only (never caption text).
         scope.launch {
             store.effects.collect { e ->
                 Log.d("JARVIS_STORE", "effect ${e.logName()}")
                 when (e) {
                     is Effect.ReplyCommand -> transport?.replyCommand(e.invocationId, e.result)
-                    is Effect.Earcon -> when (e.kind) {
-                        EarconKind.TIMER_CHIME -> playTimerChime()
-                        EarconKind.CHIRP -> earcons.playChirp()
-                        EarconKind.ERROR -> earcons.playError()
-                    }
-                    is Effect.Haptic -> if (e.kind == HapticKind.TICK) earcons.tick()
+                    is Effect.Earcon -> if (e.kind == EarconKind.TIMER_CHIME) playTimerChime()
                     else -> Unit
                 }
             }
@@ -107,13 +79,12 @@ object AppGraph {
                 )
             }
         }
-        // 50 Hz synthetic levels while simulating: only the mic channel, and only while RECORD_AUDIO is missing
-        // (the real mic and the Player's analysis drive the bus otherwise).
+        // 50 Hz synthetic levels while simulating.
         scope.launch {
             while (true) {
                 delay(20)
                 val s = store.state.value
-                if (s.mode == Mode.SIM) levels.step(s.orbState, monoMillis(), driveOut = false, driveMic = !mic.hasPermission())
+                if (s.mode == Mode.SIM) levels.step(s.orbState, monoMillis())
             }
         }
     }
