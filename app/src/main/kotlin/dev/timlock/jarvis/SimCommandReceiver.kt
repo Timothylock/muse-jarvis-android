@@ -97,9 +97,13 @@ class SimCommandReceiver : BroadcastReceiver() {
                 JSONObject().put("cmd", cmd).put("ok", true).put("node_id", nodeId).put("path", path)
             }
             "provision_token" -> {
-                val err = pairing.provisionToken(intent.getStringExtra("token"))
+                val raw = intent.getStringExtra("token")
+                // §4.2 P1: while the pairing flow is open, provisioning goes through it (accepted only on P1);
+                // otherwise the M6 controller path stores the token directly.
+                val flow = AppGraph.pairingFlow.value
+                val err = if (flow != null) flow.provisionToken(raw) else pairing.provisionToken(raw)
                 if (err != null) fail(cmd, err) else {
-                    val hint = SdkToken(intent.getStringExtra("token").orEmpty()).hint()
+                    val hint = SdkToken(raw.orEmpty()).hint()
                     JSONObject().put("cmd", cmd).put("ok", true).put("hint", hint)
                 }
             }
