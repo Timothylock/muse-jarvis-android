@@ -1,21 +1,17 @@
 {
   "id": "send_failure",
   "dp": 1,
-  "title": "Fallback path: send_fail ERRORs one turn, the retry succeeds",
+  "title": "send_fail fault armed, then a normal realtime turn",
   "start": "idle",
+  "note": "send_fail only affects the fallback path (sendDictatedTurn), added in M5; assertions for ERROR then retry-succeeds come then.",
   "steps": [
-    {"at": 0, "op": "fault", "kind": "admit_timeout"},
-    {"op": "await_ptt", "user_text": "First try."},
-    {"op": "expect", "orb": "error", "within_ms": 40000},
-    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 5000},
-    {"op": "fault", "kind": "send_fail"},
-    {"op": "fault", "kind": "admit_timeout"},
-    {"op": "await_ptt", "user_text": "Second try."},
-    {"op": "expect", "orb": "error", "call": "none", "within_ms": 40000},
-    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 5000},
-    {"op": "await_ptt", "user_text": "Retry."},
-    {"op": "expect", "orb": "listening", "call": "none", "within_ms": 2000},
-    {"op": "expect", "orb": "speaking", "call": "none", "within_ms": 10000},
-    {"op": "expect", "orb": "idle", "call": "none", "within_ms": 15000}
+    {"at": 0, "op": "fault", "kind": "send_fail"},
+    {"at": 0, "op": "admission", "ms": 600},
+    {"op": "await_ptt", "user_text": "Send this one.", "at": 0},
+    {"after": "ptt_up", "op": "think", "ms": 1000},
+    {"op": "turn_started"},
+    {"at": "+800", "op": "speak", "text": "The realtime path is unaffected by that fault.", "ms": 2500},
+    {"after": "speech_end", "op": "turn_settled"},
+    {"at": "+400", "op": "expect", "orb": "standby", "call": "ready", "within_ms": 1500}
   ]
 }

@@ -40,103 +40,9 @@ class MicSource(
     fun hasPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    // ---- test-input injection (§7.7: the only approved real-mode injection) --------------------
-    private var armedPcm: ShortArray? = null
-    private var armedDone: (() -> Unit)? = null
-    private var injectThread: Thread? = null
-    @Volatile private var injectCancel = false
-
-    /**
-     * Arms a WAV (24 kHz mono) as the mic input of the NEXT [start]: no AudioRecord, no RECORD_AUDIO needed.
-     * Returns null when armed, else an error ("mic busy" while capture/injection is running). [onDone] runs once
-     * when all samples were fed (not on cancel). The samples are fed once the queue is LIVE, so a long admission
-     * cannot overflow the 10 s backlog ring and drop the start of the clip.
-     */
-    fun armInjection(pcm24k: ShortArray, onDone: () -> Unit): String? = synchronized(lock) {
-        if (thread != null || recording || injectThread != null) return@synchronized "mic busy"
-        if (pcm24k.isEmpty()) return@synchronized "empty audio"
-        armedPcm = pcm24k
-        armedDone = onDone
-        null
-    }
-
-    /** Disarms and stops a running injection (no onDone). */
-    fun cancelInjection() {
-        val t: Thread?
-        synchronized(lock) {
-            armedPcm = null; armedDone = null
-            injectCancel = true
-            t = injectThread
-        }
-        t?.interrupt()
-    }
-
-    private fun startInjection(pcm: ShortArray, done: () -> Unit) {
-        injectCancel = false
-        val t = Thread({ injectLoop(pcm, done) }, "audio-inject")
-        injectThread = t
-        t.start()
-    }
-
-    private fun injectLoop(pcm: ShortArray, done: () -> Unit) {
-        try { Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO) } catch (_: Throwable) {}
-        var completed = false
-        try {
-            val waitEnd = System.nanoTime() + 70_000_000_000L
-            while (queue.currentMode != MicFrameQueue.Mode.LIVE) {
-                if (injectCancel || hardStop || System.nanoTime() > waitEnd) return
-                Thread.sleep(10)
-            }
-            val block = ShortArray(BLOCK)
-            val t0 = System.nanoTime()
-            var k = 0
-            var off = 0
-            while (off < pcm.size) {
-                val due = t0 + k * 20_000_000L
-                while (true) {
-                    val d = due - System.nanoTime()
-                    if (d <= 0) break
-                    Thread.sleep(d / 1_000_000L, (d % 1_000_000L).toInt())
-                }
-                if (injectCancel || hardStop) return
-                val n = minOf(BLOCK, pcm.size - off)
-                System.arraycopy(pcm, off, block, 0, n)
-                if (n < BLOCK) java.util.Arrays.fill(block, n, BLOCK, 0.toShort())
-                val m = queue.currentMode
-                analyzer.process(block, 0, BLOCK, idle = m == MicFrameQueue.Mode.SILENCE || m == MicFrameQueue.Mode.STOPPED)
-                bus.mic.publish(analyzer.env, analyzer.onsetCount, analyzer.bands, analyzer.onsetStrength)
-                queue.onCaptured(block, 0, BLOCK)
-                off += BLOCK
-                k++
-            }
-            completed = true
-        } catch (_: InterruptedException) {
-            // cancelled
-        } catch (t: Throwable) {
-            Log.w(TAG, "mic_inject_error ${t.javaClass.simpleName}")
-        } finally {
-            synchronized(lock) { if (injectThread === Thread.currentThread()) injectThread = null }
-            analyzer.reset()
-            bus.mic.publish(0f, analyzer.onsetCount, analyzer.bands, 0f)
-            if (completed && !injectCancel) try { done() } catch (t: Throwable) { Log.w(TAG, "mic_inject_done_error") }
-        }
-    }
-
     /** MicStart: capture to backlog (opens the recorder unless the tail kept it open). */
     fun start() {
         queue.start()
-        synchronized(lock) {
-            val pcm = armedPcm
-            if (pcm != null) {
-                val done = armedDone ?: {}
-                armedPcm = null; armedDone = null
-                stopAtNs = 0L
-                hardStop = false
-                startInjection(pcm, done)
-                return
-            }
-            if (injectThread != null) return // an injection is feeding this utterance
-        }
         if (!hasPermission()) {
             Log.w(TAG, "mic_permission_missing")
             onPermissionMissing()
@@ -167,7 +73,6 @@ class MicSource(
     /** MicStop: close the recorder now and EOF the current call stream. */
     fun stop() {
         hardStop = true
-        injectThread?.interrupt()
         queue.stopped()
         queue.endStream()
     }

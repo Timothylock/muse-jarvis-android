@@ -9,6 +9,7 @@ import dev.timlock.jarvis.core.model.SimFault
 import dev.timlock.jarvis.core.store.REASON_SESSION_DEAD
 import dev.timlock.jarvis.core.transport.PcmFormat
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.getAndUpdate
@@ -49,8 +50,6 @@ private const val TAG = "JARVIS_SIM"
 private const val NODE_ID = "sim-node-0001"
 private const val VM_NAME = "Simulated VM"
 private const val READY_TIMEOUT_MS = 35_000L
-private const val SIM_FALLBACK_LATENCY_MS = 700L
-private const val SIM_FALLBACK_REPLY_MS = 2_000
 
 /** Simulated transport (§7.1). M1 skeleton: link, fake pairing and a call that becomes Ready. */
 class SimTransport : GadgetTransport {
@@ -181,29 +180,10 @@ class SimTransport : GadgetTransport {
         if (_link.value !is LinkState.Online && _link.value !is LinkState.Connecting) setLink(LinkState.Online(NODE_ID, VM_NAME))
     }
 
-    private val fallbackSeq = AtomicInteger(0)
-
-    /**
-     * Fallback voice path (§4.3.1): a canned reply plus ~2 s of babble PCM after a short simulated round trip.
-     * The armed SEND_FAIL fault fails exactly one turn with error "send_failed".
-     */
     override suspend fun sendDictatedTurn(pcm: ShortArray, sessionId: UUID): FallbackTurn {
-        delay(scaled(SIM_FALLBACK_LATENCY_MS))
-        if (sendFailArmed.getAndSet(false)) {
-            note("{\"cmd\":\"fallback_turn\",\"ok\":false}")
-            return FallbackTurn(replyText = null, error = "send_failed")
-        }
-        val n = fallbackSeq.incrementAndGet()
-        val voice = SimVoice(0xFA11L + n)
-        val frames = SIM_FALLBACK_REPLY_MS / 40
-        val out = ShortArray(frames * PcmFormat.FRAME_SAMPLES)
-        val frame = ShortArray(PcmFormat.FRAME_SAMPLES)
-        for (f in 0 until frames) {
-            voice.fill(frame)
-            frame.copyInto(out, f * PcmFormat.FRAME_SAMPLES)
-        }
-        note("{\"cmd\":\"fallback_turn\",\"ok\":true,\"samples\":${out.size}}")
-        return FallbackTurn(replyText = "Simulated reply over the text path.", replyPcm = out)
+        // TODO(M5): scripted reply text + babble PCM.
+        if (sendFailArmed.getAndSet(false)) return FallbackTurn(replyText = null, error = "send_failed")
+        return FallbackTurn(replyText = "Simulated reply.")
     }
 
     private val pendingCommands = ConcurrentHashMap<String, CompletableDeferred<CommandResult>>()
@@ -242,9 +222,9 @@ class SimCall internal constructor(
     private val _state = MutableStateFlow<CallPhase>(CallPhase.Admitting)
     override val state: StateFlow<CallPhase> = _state.asStateFlow()
 
-    // TODO(M5): consume mic frames.
     @Volatile var mic: PcmSource? = null
         private set
+    private val micJob = SupervisorJob(scope.coroutineContext[Job])
     @Volatile var speaker: PcmSink? = null
         private set
 
@@ -265,7 +245,18 @@ class SimCall internal constructor(
         }
     }
 
-    override fun attachMic(source: PcmSource) { mic = source }
+    /**
+     * §7.1: the real mic records (for reactivity) but SimCall discards the audio. It must keep pulling so the
+     * paced source runs; stops on end of stream or when the call ends.
+     */
+    override fun attachMic(source: PcmSource) {
+        mic = source
+        (scope + micJob).launch {
+            while (isActive && _state.value !is CallPhase.Ended) {
+                source.nextFrame() ?: break
+            }
+        }
+    }
     override fun attachSpeaker(sink: PcmSink) { speaker = sink }
 
     /** Cancel speech synthesis and flush the speaker (§4.3 barge-in). */
@@ -281,7 +272,7 @@ class SimCall internal constructor(
     /** Ends the call with [reason] (no-op if already ended). Always returns null (for `?: return` chaining). */
     internal fun end(reason: String): String? {
         val prev = _state.getAndUpdate { if (it is CallPhase.Ended) it else CallPhase.Ended(reason) }
-        if (prev !is CallPhase.Ended) abandon()
+        if (prev !is CallPhase.Ended) { abandon(); micJob.cancel() }
         return null
     }
 
