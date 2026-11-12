@@ -166,7 +166,7 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                     if (state.perfHud) {
                         val perf by vm.perfHud.collectAsState()
                         val px = LocalPx.current
-                        PerfHud(perf, Modifier.align(Alignment.TopEnd).padding(top = px.dp(56f), end = px.dp(50f)))
+                        PerfHud(perf, Modifier.align(Alignment.BottomStart).padding(bottom = px.dp(72f), start = px.dp(16f))) // bottom-left: clear of panels (x>=625) and the docked orb
                     }
                     if (simMode) SimLayer(vm, drawerOpen, state.forcedOrb, state.orbState, state.perfHud) { drawerOpen = it }
                 }
