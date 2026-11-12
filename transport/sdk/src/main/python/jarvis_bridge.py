@@ -918,6 +918,7 @@ class _Source:
     def __init__(self):
         self.q = asyncio.Queue()
         self.eof = False
+        self.output = None  # wired to the call's _Output by CallRunner
 
     def put(self, data):
         if self.q.qsize() >= self.MAX_FRAMES:
@@ -933,6 +934,27 @@ class _Source:
     async def __anext__(self):
         if self.eof and self.q.empty():
             raise StopAsyncIteration
+        out = self.output
+        if out is not None and out.active:
+            # Muse is speaking: the SDK's half-duplex gate discards mic frames unheard, so feeding
+            # them at 25/s only steals loop time from the playback pump. Nap, then hand over just
+            # the freshest queued frame.
+            await asyncio.sleep(0.1)
+            newest, saw_eof = None, False
+            while True:
+                try:
+                    item = self.q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if item is None:
+                    saw_eof = True
+                    break
+                newest = item
+            if saw_eof:
+                self.eof = True
+                raise StopAsyncIteration
+            if newest is not None:
+                return newest
         item = await self.q.get()
         if item is None:
             self.eof = True
@@ -941,14 +963,66 @@ class _Source:
 
 
 class _Output:
+    """Buffered speaker sink.
+
+    The SDK's play pump calls write() once per 40 ms frame and paces itself with a sleep after
+    every frame, so write() must be nearly free: it only appends to a buffer. (Crossing JNI per
+    frame made the pump run ~0.84x on the tablet: the speaker starved into stutter/slow speech,
+    and undelivered audio piled into the SDK's 5 s playback queue until long replies died with
+    ValueError.) A feeder task forwards the buffer to Kotlin in ~240 ms batches on an absolute
+    deadline schedule: a late iteration shortens the next sleep instead of drifting, so the
+    long-run delivery rate stays 1.0x."""
+
+    FEED_BYTES = 24000 * 2 * 240 // 1000  # 240 ms of 24 kHz PCM16 per JNI crossing
+    RATE_BPS = 24000 * 2
+
     def __init__(self, call_id):
         self.call_id = call_id
+        self.buf = bytearray()
+        self.gen = 0  # bumped by flush(); a feeder from an older generation exits
+        self.feeder = None
+        self.deadline = None
+        self.last_write = 0.0
+
+    @property
+    def active(self):
+        return bool(self.buf) or (time.monotonic() - self.last_write) < 0.35
 
     def write(self, pcm):
-        HOST.pcmOut(self.call_id, _jbytes(pcm))
+        self.buf += pcm
+        self.last_write = time.monotonic()
+        if self.feeder is None or self.feeder.done():
+            self.feeder = asyncio.ensure_future(self._feed(self.gen))
+
+    async def _feed(self, gen):
+        while gen == self.gen:
+            if not self.buf:
+                self.deadline = None
+                return
+            n = min(len(self.buf), self.FEED_BYTES)
+            chunk = bytes(self.buf[:n])
+            del self.buf[:n]
+            HOST.pcmOut(self.call_id, _jbytes(chunk))
+            now = time.monotonic()
+            if self.deadline is None or self.deadline < now - 0.5:
+                self.deadline = now
+            self.deadline += len(chunk) / self.RATE_BPS
+            delay = self.deadline - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
 
     def flush(self):
+        self.gen += 1
+        self.buf.clear()
+        self.deadline = None
         HOST.pcmFlush(self.call_id)
+
+    async def aclose(self):
+        if self.feeder is not None and not self.feeder.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self.feeder), 3)
+            except BaseException:  # noqa: BLE001
+                self.feeder.cancel()
 
 
 _TRANSCRIPTS = {
@@ -989,6 +1063,7 @@ class CallRunner:
         self.loop = asyncio.get_running_loop()
         self.source = _Source()
         self.output = _Output(call_id)
+        self.source.output = self.output
         self.call = None
         self.task = None
         self.hangup = False
@@ -1099,6 +1174,10 @@ class CallRunner:
         finally:
             if watcher is not None:
                 watcher.cancel()
+            try:
+                await self.output.aclose()  # let the feeder deliver the tail before teardown
+            except BaseException:  # noqa: BLE001
+                pass
             stop.set()
             if conn is not None:
                 try:
