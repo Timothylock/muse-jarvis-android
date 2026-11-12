@@ -37,11 +37,6 @@ class MicSource(
     @Volatile var recording = false
         private set
 
-    /** Linear mic gain from the user's setting (-6/0/+6 dB); applied to captured PCM before analysis and upload. */
-    @Volatile var gainDb: Int = 0
-        set(v) { field = v.coerceIn(-12, 12); gainLinear = Math.pow(10.0, field / 20.0).toFloat() }
-    @Volatile private var gainLinear = 1f
-
     fun hasPermission(): Boolean =
         context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
@@ -251,7 +246,6 @@ class MicSource(
                 if (got < raw.size) break
                 val src: ShortArray
                 if (decim != null) { decim.process(raw, raw.size, block); src = block } else src = raw
-                applyGain(src, BLOCK)
                 val m = queue.currentMode
                 analyzer.process(src, 0, BLOCK, idle = m == MicFrameQueue.Mode.SILENCE || m == MicFrameQueue.Mode.STOPPED)
                 bus.mic.publish(analyzer.env, analyzer.onsetCount, analyzer.bands, analyzer.onsetStrength)
@@ -269,12 +263,6 @@ class MicSource(
             analyzer.reset()
             bus.mic.publish(0f, analyzer.onsetCount, analyzer.bands, 0f)
         }
-    }
-
-    private fun applyGain(buf: ShortArray, n: Int) {
-        val g = gainLinear
-        if (g == 1f) return
-        for (i in 0 until n) buf[i] = (buf[i] * g).toInt().coerceIn(-32768, 32767).toShort()
     }
 
     /** Atomic with [start]'s spawn decision: once true, [thread] is already cleared so a new start() spawns afresh. */

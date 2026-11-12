@@ -56,6 +56,23 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
     var crawlAmt = 0f
     var ambientMix = 0f
     var env = 0f
+    /** H16: 0 centered .. 1 docked (follows the outer spring); grid radius fades 1.6 R -> 1.35 R. */
+    var dockMix = 0f
+    /** C12: Lissajous drift offset (px) applied to the orb centre, used for particle parallax. */
+    var driftX = 0f; var driftY = 0f
+    /** C14: 0 day .. 1 night ember. */
+    var nightMix = 0f
+    private var nightInit = false
+    // C7 micro-events (ambient "systems check"), outputs
+    var microTickHead = -1f      // L1 tick sweep head (tick index units), < 0 = off
+    var microArcM = 0f           // L4 arc swap 0..1
+    var microBlink = 1f          // core intensity factor
+    val cometIdx = FloatArray(4) { -1f }   // streamer vertex ids, set by the renderer
+    val cometOff = FloatArray(4)           // accumulated extra orbit (time units) per slot
+    var cometAct = -1f; var cometBoost = 0f
+    private var microKind = 0; private var microAt = 0L; private var microTick0 = 0f
+    private var nextMicroMs = 0L; private var lastMicroEndMs = 0L; private var nextNightBlinkMs = 0L
+    private var pendingMicro = 0
     // particles
     var partOrbit = 0f; var partRadOff = 0f; var partCount = 120f; var partBright = 0f; var partPull = 1f
     var timeSec = 0f
@@ -153,6 +170,9 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         val auto = trackState == OrbState.IDLE && nowMs - trackSince >= AMBIENT_AFTER_MS && !isNight
         val wantMin = ambientOverride ?: auto
         ambient(nowMs, wantMin)
+        if (!nightInit) { nightInit = true; nightMix = if (isNight) 1f else 0f }
+        else nightMix += ((if (isNight) 1f else 0f) - nightMix) * min(1f, dt * 2.5f)
+        micro(nowMs, dt, ambMode == 2, isNight)
 
         // ---- audio ----
         bus.mic.read(micBuf); bus.out.read(outBuf)
@@ -206,8 +226,9 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         // ---- L4 arcs ----
         val breathe = 10f * sin(TWO_PI * t / 6f)
         val think = cur[P.L4_AMP_T] * sin(TWO_PI * t / 1.2f)
-        arc0 = 0f; arc0Len = rad(140f + breathe + think)
-        arc1 = rad(200f); arc1Len = rad(70f - breathe * 0.7f - think * 0.6f)
+        val am = 40f * microArcM // C7(b): 140 -> 100 deg while 70 -> 110 deg
+        arc0 = 0f; arc0Len = rad(140f + breathe + think - am)
+        arc1 = rad(200f); arc1Len = rad(70f - breathe * 0.7f - think * 0.6f + am)
 
         // ---- glints (§3.4) ----
         if (nowMs >= nextGlintMs) {
@@ -221,7 +242,7 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
 
         // ---- overlays ----
         val pt = (nowMs - sn.pulseAtMs).toFloat()
-        pulse = if (sn.pulseAtMs > 0 && pt in 0f..300f) 1f - pt / 300f else 0f
+        pulse = if (sn.pulseAtMs > 0 && pt in 0f..300f) exp(-pt / 90f) else 0f // H14
         val at = (nowMs - sn.attentionAtMs).toFloat()
         attention = if (sn.attentionAtMs > 0 && at in 0f..600f) sin(PI.toFloat() * at / 600f) else 0f
         val st = (nowMs - sn.shakeAtMs).toFloat()
@@ -258,7 +279,7 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         for (i in 0 until Lyr.COUNT) {
             val order = BOOT_ORDER[i]
             val rv = ((boot - order * 0.065f) / 0.35f).coerceIn(0f, 1f)
-            layer[i] = cur[P.VIS + i] * rv * rv * (3f - 2f * rv)
+            layer[i] = cur[P.VIS + i] * rv * rv * (3f - 2f * rv) * (1f + (StateTable.nightVis[i] - 1f) * nightMix)
         }
         revealTimeline(nowMs)
 
@@ -281,6 +302,13 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         coreScale = (1f + 0.04f * breath * breathK) * (1f + 0.12f * env) * (1f + sleepBreath)
         coreInt = cur[P.CORE] + 0.05f * breath * breathK + cur[P.CORE_MIC] * envMic + cur[P.CORE_OUT] * outEff +
             cur[P.CORE_PULSE] * sin(TWO_PI * 1.6f * t)
+        if (nightMix > 0.001f) { // C14 ember: 12 s breathing cycle, L1 breathes with it
+            val br = sin(TWO_PI * t / StateTable.NIGHT_BREATH_S)
+            coreInt += (0.75f + 0.15f * br - coreInt) * nightMix
+            coreScale += (1f + 0.05f * br - coreScale) * nightMix
+            layer[Lyr.BEZEL] *= 1f + nightMix * (0.15f * br - 0.1f)
+        }
+        coreInt *= microBlink
 
         // ---- L7 displacement (C5): bipolar +-18 px (scaled) around 0.46 R from (band - 0.5)*2*env, 3-tap smoothed ----
         val maxPx = 0.0692f * radius
@@ -303,7 +331,7 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         var gw = 0f
         if (trackState == OrbState.LISTENING && stT < 0.6f) { val x = 1f - stT / 0.6f; gw = x * x }
         val vel = cur[P.PVEL] + cur[P.PVEL_OUT] * outEff - 32f * gw
-        partOrbit += sp * (1f + 0.6f * gw) * dt
+        partOrbit += sp * (1f + 0.6f * gw) * (1f - 0.6f * ambientMix) * dt // H10
         partRadOff = (partRadOff + vel / max(radius, 1f) * dt) % 1.1f
         if (partRadOff < 0f) partRadOff += 1.1f
         partBright = cur[P.PBR] + cur[P.PBR_OUT] * outEff
@@ -314,6 +342,65 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         val stepC = 480f * dt
         partCount = if (dir > stepC) partCount + stepC else if (dir < -stepC) partCount - stepC else target
     }
+
+    /** Debug hook: start a micro-event now (1..4, or -1 for a random one). GL thread only. */
+    fun triggerMicro(kind: Int) { pendingMicro = kind }
+
+    private fun startMicro(nowMs: Long, kind: Int) {
+        microKind = if (kind in 1..4) kind else 1 + (rand() * 4f).toInt().coerceIn(0, 3)
+        microAt = nowMs
+        microTick0 = floor(rand() * 120f)
+        if (microKind == 3) cometAct = (rand() * 4f).toInt().coerceIn(0, 3).toFloat()
+    }
+
+    /** C7 / C14. Everything is a uniform on existing draws; durations: a 1.7 s, b 4 s, c 2 s, d 0.72 s. */
+    private fun micro(nowMs: Long, dt: Float, ambientNow: Boolean, isNight: Boolean) {
+        if (pendingMicro != 0) { startMicro(nowMs, pendingMicro); pendingMicro = 0 }
+        else if (microKind == 0) {
+            if (isNight) {
+                if (nextNightBlinkMs == 0L) nextNightBlinkMs = nowMs + StateTable.NIGHT_BLINK_MIN_MS + (rand() * StateTable.NIGHT_BLINK_SPAN_MS).toLong()
+                if (nowMs >= nextNightBlinkMs) {
+                    startMicro(nowMs, 4)
+                    nextNightBlinkMs = nowMs + StateTable.NIGHT_BLINK_MIN_MS + (rand() * StateTable.NIGHT_BLINK_SPAN_MS).toLong()
+                }
+            } else if (ambientNow) {
+                if (nextMicroMs == 0L) nextMicroMs = nowMs + 45_000L + (rand() * 75_000f).toLong()
+                if (nowMs >= nextMicroMs && nowMs - lastMicroEndMs >= 30_000L) {
+                    startMicro(nowMs, -1)
+                    nextMicroMs = nowMs + 45_000L + (rand() * 75_000f).toLong()
+                }
+            } else nextMicroMs = 0L
+            if (!isNight) nextNightBlinkMs = 0L
+        }
+        microTickHead = -1f; microArcM = 0f; microBlink = 1f; cometBoost = 0f
+        if (microKind == 0) { cometAct = -1f; return }
+        val tm = (nowMs - microAt) / 1000f
+        when (microKind) {
+            1 -> {
+                if (tm >= 1.7f) endMicro(nowMs) else microTickHead = microTick0 + 18f * (tm / 1.7f)
+            }
+            2 -> {
+                if (tm >= 4f) endMicro(nowMs) else {
+                    val x = if (tm < 2f) tm / 2f else (4f - tm) / 2f
+                    microArcM = 0.5f - 0.5f * cos(PI.toFloat() * x) // ease-in-out-sine
+                }
+            }
+            3 -> {
+                if (tm >= 2f) { endMicro(nowMs); cometAct = -1f } else {
+                    val b = sin(PI.toFloat() * tm / 2f)
+                    cometBoost = b
+                    val k = cometAct.toInt()
+                    if (k in 0..3) cometOff[k] += 3f * b * dt
+                }
+            }
+            else -> {
+                if (tm >= 0.72f) endMicro(nowMs) else if (tm < 0.12f) microBlink = 1f - 0.55f * (tm / 0.12f)
+                else { val x = (tm - 0.12f) / 0.6f; microBlink = 0.45f + 0.55f * (1f - (1f - x) * (1f - x)) }
+            }
+        }
+    }
+
+    private fun endMicro(nowMs: Long) { microKind = 0; lastMicroEndMs = nowMs }
 
     private fun spawnEcho(nowMs: Long, strength: Float) {
         var slot = -1; var oldest = Long.MAX_VALUE
@@ -434,6 +521,8 @@ internal class OrbScene(private val holder: OrbStateHolder, private val bus: Aud
         val drift = 6f * scale
         val dx = drift * sin(TWO_PI * t / 660f)
         val dy = drift * sin(TWO_PI * t / 780f + 1.3f)
+        driftX = dx; driftY = dy
+        dockMix = ((LAY_CX[0] - sp6[3]) / (LAY_CX[0] - LAY_CX[1])).coerceIn(0f, 1f)
         cx = sp6[0] * scale + dx
         cy = offY + sp6[1] * scale + dy
         radius = max(sp6[2], 1f) * 0.5f * scale

@@ -68,6 +68,15 @@ internal object StateTable {
         lin(CYAN_BRIGHT, r, P.TINT_INNER); lin(CYAN_BRIGHT, r, P.TINT_L4); lin(CYAN_MID, r, P.TINT_L3)
     }
 
+    /**
+     * C14 NIGHT "ember" row: only the core and L1 (bezel) stay visible; everything else fades out. Applied by the scene as
+     * a visibility multiplier (eased by nightMix), in addition to the global x0.35 gain. Breathes on a 12 s cycle.
+     */
+    val nightVis: FloatArray = FloatArray(Lyr.COUNT).also { it[Lyr.BEZEL] = 1f; it[Lyr.CORE] = 1f }
+    const val NIGHT_BREATH_S = 12f
+    const val NIGHT_BLINK_MIN_MS = 150_000L
+    const val NIGHT_BLINK_SPAN_MS = 60_000L
+
     val rows: Array<FloatArray> = Array(OrbState.values().size) { idle }.also { a ->
         a[OrbState.IDLE.ordinal] = idle
         a[OrbState.BOOT.ordinal] = row(idle) { }

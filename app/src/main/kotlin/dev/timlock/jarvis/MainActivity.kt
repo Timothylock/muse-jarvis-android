@@ -9,14 +9,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import dev.timlock.jarvis.core.model.QualityPref
-import dev.timlock.jarvis.render.orb.Tier
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -97,11 +90,6 @@ class MainActivity : ComponentActivity() {
         vm.onScenarioExtras(id, ts, auto)
     }
 
-    override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
-        AppGraph.night.onInteraction() // §2.7: any touch wakes night dim and restarts the idle timer
-        return super.dispatchTouchEvent(ev)
-    }
-
     override fun onResume() {
         super.onResume()
         orbView?.resumeOrb()
@@ -129,28 +117,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) {
     val state by vm.store.state.collectAsState()
-    val settingsOpen by AppGraph.settingsOpen.collectAsState()
-    var orb by remember { mutableStateOf<OrbSurfaceView?>(null) }
-    val activity = LocalContext.current as? android.app.Activity
-    // §4.5 quality: Auto = governor (null override).
-    LaunchedEffect(orb, state.config.quality) {
-        orb?.qualityOverride = when (state.config.quality) {
-            QualityPref.AUTO -> null
-            QualityPref.A -> Tier.A
-            QualityPref.B -> Tier.B
-            QualityPref.C -> Tier.C
-        }
-    }
-    // §2.7 night: window brightness 0.08 while night, system default otherwise; panels fade over 1 s.
-    LaunchedEffect(state.night) {
-        activity?.window?.let { w ->
-            w.attributes = w.attributes.also {
-                it.screenBrightness = if (state.night) 0.08f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-            }
-        }
-    }
-    val panelAlpha by animateFloatAsState(if (state.night) 0f else 1f, tween(1000), label = "nightPanels")
-    BackHandler(enabled = settingsOpen) { AppGraph.setSettingsOpen(false) }
     val pairingFlow by AppGraph.pairingFlow.collectAsState()
     val importRequests by AppGraph.importRequests.collectAsState()
     var importOpen by remember { mutableStateOf(false) }
@@ -174,7 +140,7 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
     ProvidePx {
         // GL orb behind everything; it draws the window background (vignette) itself.
         AndroidView(
-            factory = { ctx -> OrbSurfaceView(ctx, vm.orbHolder, vm.audioBus).also { orb = it; onOrbView(it) } },
+            factory = { ctx -> OrbSurfaceView(ctx, vm.orbHolder, vm.audioBus).also(onOrbView) },
             modifier = Modifier.fillMaxSize(),
         )
         HudBackground(drawBackground = false) {
@@ -212,9 +178,6 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         latched = state.latched,
                         testInputEnabled = state.testInputEnabled,
                         testInputActive = state.testInputActive,
-                        clock24h = state.config.clock24h,
-                        night = state.night,
-                        onSettings = { AppGraph.setSettingsOpen(true) },
                         onPttDown = { vm.store.dispatch(StoreIntent.PttDown) },
                         onPttUp = { vm.store.dispatch(StoreIntent.PttUp) },
                         onHangUp = { vm.store.dispatch(StoreIntent.HangUp) },
@@ -222,7 +185,6 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                             PanelStackView(
                                 stack = state.panels,
                                 speaking = state.orbState == OrbState.SPEAKING,
-                                modifier = Modifier.graphicsLayer { alpha = panelAlpha },
                                 heightPx = PanelHeights::estimatePx,
                                 onDismiss = { vm.store.dispatch(StoreIntent.DismissPanel(it)) },
                                 onPin = { id, pinned -> vm.store.dispatch(StoreIntent.PinPanel(id, pinned)) },
@@ -249,13 +211,6 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                     }
                     if (simMode) SimLayer(vm, drawerOpen, state.forcedOrb, state.orbState, state.perfHud) { drawerOpen = it }
                 }
-            }
-            if (settingsOpen) {
-                SettingsHost(
-                    vm, state,
-                    onOpenImport = { importOpen = true },
-                    onOpenSimPanel = { drawerOpen = true },
-                )
             }
             if (state.mode == Mode.SIM) SimFrame()
         }
