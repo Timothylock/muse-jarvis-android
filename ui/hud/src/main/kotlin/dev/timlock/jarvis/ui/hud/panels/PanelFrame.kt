@@ -59,8 +59,8 @@ import dev.timlock.jarvis.ui.hud.style
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private const val REVEAL_MS = 450f
 private const val TITLE_H = 56f
+internal const val CHIP_TITLE_H = 30f
 
 /** One panel: chrome + reveal + content crossfade + gestures. Fills its parent (sized to the panel). */
 @Composable
@@ -69,6 +69,7 @@ internal fun PanelFrame(
     h: Float,
     speaking: Boolean,
     interactive: Boolean,
+    chip: Boolean = false,
     onDismiss: () -> Unit = {},
     onPin: () -> Unit = {},
     onExpand: () -> Unit = {},
@@ -78,20 +79,8 @@ internal fun PanelFrame(
     val px = LocalPx.current
     val scope = rememberCoroutineScope()
 
-    // Reveal (§2.5): only if the panel is brand new at first composition.
-    val reveal = remember {
-        val el = monoMillis() - panel.createdAtMs
-        if (interactive && el in 0 until REVEAL_MS.toLong()) Animatable(el / REVEAL_MS) else null
-    }
-    var revealing by remember { mutableStateOf(reveal != null) }
-    if (reveal != null) {
-        LaunchedEffect(Unit) {
-            reveal.animateTo(1f, tween(((1f - reveal.value) * REVEAL_MS).toInt().coerceAtLeast(1), easing = LinearEasing))
-            revealing = false
-        }
-    }
-    val bracketP: () -> Float = { if (reveal == null) 1f else (reveal.value * REVEAL_MS / 150f).coerceIn(0f, 1f) }
-    val maskP: () -> Float = { if (reveal == null) 1f else ((reveal.value * REVEAL_MS - 150f) / 250f).coerceIn(0f, 1f) }
+    // C9 arrival timeline: animates only while t < 700 ms at first composition, otherwise settled.
+    val arrival = rememberArrival(panel.revealStartMs, interactive)
 
     // Touch affordances.
     val dragX = remember { Animatable(0f) }
@@ -137,7 +126,7 @@ internal fun PanelFrame(
 
     Box(Modifier.fillMaxSize().then(gestures)) {
         PanelChrome(
-            panel, h, bracketP, maskP, revealing = revealing,
+            panel, h, arrival, compact = chip,
             overlay = {
                 if (showX && interactive) {
                     Box(
@@ -151,35 +140,40 @@ internal fun PanelFrame(
         ) {
             if (!panel.collapsed) {
                 Crossfade(targetState = panel.content, animationSpec = tween(250), label = "panel-content") { content ->
-                    PanelBody(panel, content, h - TITLE_H, speaking, onAcknowledgeTimer, onMore)
+                    if (chip) ChipBody(content, onAcknowledgeTimer)
+                    else PanelBody(panel, content, h - TITLE_H, speaking, onAcknowledgeTimer, onMore)
                 }
             }
         }
     }
 }
 
-/** Fill, 1 px border, corner brackets, title row (+pin, SIM badge) and a body slot. No shadows or blur. */
+/**
+ * Fill, 1 px border, corner brackets, title row (+pin, SIM badge) and a body slot. No shadows or blur.
+ * [compact] = chip chrome (smaller brackets and title row). Appearance follows [arrival] (C9).
+ */
 @Composable
 internal fun PanelChrome(
     panel: Panel,
     h: Float,
-    bracketProgress: () -> Float,
-    fillProgress: () -> Float,
-    revealing: Boolean = false,
+    arrival: Arrival,
+    compact: Boolean = false,
     overlay: @Composable BoxScope.() -> Unit = {},
     body: @Composable BoxScope.() -> Unit,
 ) {
     val px = LocalPx.current
+    val armPx = if (compact) 8f else 12f
     var m: Modifier = Modifier.fillMaxSize().drawBehind {
-        val f = fillProgress()
+        val f = arrival.fill()
         val w = size.width
         val hh = size.height
         drawRect(JarvisColors.PanelFill.copy(alpha = JarvisColors.PanelFill.alpha * f))
         drawRect(JarvisColors.CyanDim.copy(alpha = f), Offset.Zero, size, style = Stroke(px.device(1f).coerceAtLeast(1f)))
-        val arm = px.device(12f) * bracketProgress()
-        if (arm > 0f) {
+        val ba = arrival.bracketAlpha()
+        val arm = px.device(armPx) * arrival.bracketScale()
+        if (ba > 0f && arm > 0f) {
             val sw = px.device(2f).coerceAtLeast(1.5f)
-            val c = JarvisColors.CyanMid
+            val c = JarvisColors.CyanMid.copy(alpha = ba)
             for ((cx, dx) in listOf(0f to 1f, w to -1f)) for ((cy, dy) in listOf(0f to 1f, hh to -1f)) {
                 drawLine(c, Offset(cx, cy), Offset(cx + dx * arm, cy), sw)
                 drawLine(c, Offset(cx, cy), Offset(cx, cy + dy * arm), sw)
@@ -188,9 +182,10 @@ internal fun PanelChrome(
     }
     if (panel.sim) m = m.simLeftEdge(px)
     Box(m) {
-        Box(Modifier.fillMaxSize().then(if (revealing) Modifier.revealMask(fillProgress, px.device(2f), px.device(24f)) else Modifier)) {
+        val reveal = if (arrival.running) Modifier.revealMask(arrival::mask, px.device(2f), px.device(24f)) else Modifier
+        Box(Modifier.fillMaxSize().then(reveal)) {
             Column(Modifier.fillMaxSize()) {
-                TitleRow(panel)
+                TitleRow(panel, compact)
                 Box(Modifier.fillMaxWidth().weight(1f).clipToBounds(), content = body)
             }
         }
@@ -199,15 +194,15 @@ internal fun PanelChrome(
 }
 
 @Composable
-private fun TitleRow(panel: Panel) {
+private fun TitleRow(panel: Panel, compact: Boolean) {
     val px = LocalPx.current
     Row(
-        Modifier.fillMaxWidth().height(px.dp(TITLE_H)).padding(horizontal = px.dp(24f)),
+        Modifier.fillMaxWidth().height(px.dp(if (compact) CHIP_TITLE_H else TITLE_H)).padding(horizontal = px.dp(if (compact) 12f else 24f)),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             panel.title.uppercase(),
-            style = JarvisType.HudLabel.style(JarvisColors.CyanMid),
+            style = (if (compact) JarvisType.StatusBar else JarvisType.HudLabel).style(JarvisColors.CyanMid),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
@@ -244,6 +239,16 @@ private fun Modifier.revealMask(p: () -> Float, lineWidth: Float, soft: Float): 
                 Brush.verticalGradient(listOf(Color.Black, Color.Transparent), startY = edge - soft, endY = edge),
                 Offset.Zero, Size(size.width, size.height), blendMode = BlendMode.DstIn,
             )
-            if (t > 0f) drawLine(JarvisColors.CyanBright, Offset(0f, edge), Offset(size.width, edge), lineWidth)
+            if (t > 0f) {
+                // 24 px gradient tail trailing the 2 px scan line.
+                drawRect(
+                    Brush.verticalGradient(
+                        listOf(Color.Transparent, JarvisColors.CyanBright.copy(alpha = 0.35f)),
+                        startY = edge - soft, endY = edge,
+                    ),
+                    Offset(0f, (edge - soft).coerceAtLeast(0f)), Size(size.width, edge - (edge - soft).coerceAtLeast(0f)),
+                )
+                drawLine(JarvisColors.CyanBright, Offset(0f, edge), Offset(size.width, edge), lineWidth)
+            }
         }
     }

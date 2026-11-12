@@ -18,6 +18,7 @@ import dev.timlock.jarvis.core.model.OrbState.THINKING
 import dev.timlock.jarvis.core.model.OrbState.UNPAIRED
 import dev.timlock.jarvis.core.model.CommandResult
 import dev.timlock.jarvis.core.model.PanelContent
+import dev.timlock.jarvis.core.model.PanelPlacement
 import dev.timlock.jarvis.core.model.PanelStack
 import dev.timlock.jarvis.core.model.PanelType
 import dev.timlock.jarvis.core.model.TransportKind
@@ -183,7 +184,7 @@ private class Ctx(var s: AppState, val now: Long) {
         }
         s.layoutReturnAt?.takeIf { it <= now }?.let {
             s = s.copy(layoutReturnAt = null)
-            if (s.panelCount == 0 && s.layout == OrbLayout.DOCKED) s = s.copy(layout = OrbLayout.CENTERED, layoutSinceMs = now)
+            if (s.dockCount == 0 && s.layout == OrbLayout.DOCKED) s = s.copy(layout = OrbLayout.CENTERED, layoutSinceMs = now)
         }
     }
 
@@ -204,7 +205,11 @@ private class Ctx(var s: AppState, val now: Long) {
 
     /** Recompute expiries when the call opens or closes (§5.5: the call is the context). */
     fun lifetimes(wasOpen: Boolean) {
-        if (wasOpen != callOpen) s = s.copy(panels = PanelManager.applyLifetimes(s.panels, callOpen, now))
+        if (wasOpen != callOpen) {
+            var p = PanelManager.applyLifetimes(s.panels, callOpen, now)
+            if (wasOpen && !callOpen) p = PanelManager.demoteAtCallEnd(p, now) // H1: persistent panels become chips
+            s = s.copy(panels = p)
+        }
     }
 
     fun exitError() {
@@ -402,7 +407,11 @@ private class Ctx(var s: AppState, val now: Long) {
         val keep = saved.panels.filter { PanelManager.isSticky(it) || it.type == PanelType.TIMER }.map {
             val c = it.content
             val content = if (c is PanelContent.Timer && c.endsAtMs <= now) c.copy(chimed = true) else it.content
-            it.copy(content = content, sim = false, collapsed = false)
+            it.copy(
+                content = content, sim = false, collapsed = false,
+                placement = if (callOpen) PanelPlacement.DOCK else PanelPlacement.CHIP,
+                revealStartMs = now - PanelManager.BRACKET_STAGE_MS,
+            )
         }.take(PanelManager.MAX_PANELS)
         val restored = PanelManager.layout(PanelManager.applyLifetimes(PanelStack(keep), callOpen, now))
         s = s.copy(panels = PanelManager.expire(restored, now).first)
@@ -438,7 +447,14 @@ private class Ctx(var s: AppState, val now: Long) {
             }
             is Validation.Show -> {
                 val panel = v.panel.copy(sim = s.mode == Mode.SIM)
-                s = s.copy(panels = PanelManager.upsert(s.panels, panel, now, callOpen), pulseAtMs = now)
+                val before = s.panels.panels.firstOrNull { it.id == panel.id }
+                val dockedBefore = s.layout == OrbLayout.DOCKED
+                val next = PanelManager.upsert(s.panels, panel, now, callOpen, dockedBefore = dockedBefore)
+                val after = next.panels.first { it.id == panel.id }
+                // C9: a DOCK arrival (or chip->dock promotion) pulses when the brackets pop, possibly in the future.
+                val arrived = before == null || before.placement != after.placement
+                val pulse = if (arrived && after.placement == PanelPlacement.DOCK) after.revealStartMs + PanelManager.BRACKET_STAGE_MS else now
+                s = s.copy(panels = next, pulseAtMs = pulse)
                 if (!callOpen) s = s.copy(attentionAtMs = now) // ambient push (§2.6)
                 emit(Effect.ReplyCommand(e.invocationId, CommandResult.ok(DisplayValidator.showPayload(panel.id, v.truncated, v.ignored))))
             }
@@ -451,15 +467,15 @@ private class Ctx(var s: AppState, val now: Long) {
         if (m != STANDBY && (s.countdownStartMs != 0L || s.countdownEndMs != 0L)) {
             s = s.copy(countdownStartMs = 0L, countdownEndMs = 0L)
         }
-        // Layout: DOCKED while panels exist; 1.2 s delay before returning to CENTERED.
+        // Layout: DOCKED while DOCK-placed panels exist (chips never dock the orb, H1); 1.2 s delay before returning to CENTERED.
         val target = when {
             s.mode == null -> OrbLayout.FIRST_RUN
             m == PAIRING -> OrbLayout.PAIRING
-            s.panelCount > 0 || s.layout == OrbLayout.DOCKED -> OrbLayout.DOCKED
+            s.dockCount > 0 || s.layout == OrbLayout.DOCKED -> OrbLayout.DOCKED
             else -> OrbLayout.CENTERED
         }
         val ret = when {
-            target != OrbLayout.DOCKED || s.panelCount > 0 -> null
+            target != OrbLayout.DOCKED || s.dockCount > 0 -> null
             else -> s.layoutReturnAt ?: (now + LAYOUT_RETURN_MS)
         }
         s = if (target != s.layout) s.copy(layout = target, layoutSinceMs = now, layoutReturnAt = ret) else s.copy(layoutReturnAt = ret)

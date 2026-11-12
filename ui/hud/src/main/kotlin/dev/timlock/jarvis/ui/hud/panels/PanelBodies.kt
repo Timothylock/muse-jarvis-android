@@ -62,6 +62,53 @@ internal fun PanelBody(
     }
 }
 
+/** Compact body for a 260x96 chip (H1): stats -> up to 3 metrics, card -> first line, list -> counts, timer -> countdown. */
+@Composable
+internal fun ChipBody(content: PanelContent, onAcknowledgeTimer: () -> Unit) {
+    val px = LocalPx.current
+    when (content) {
+        is PanelContent.Stats -> Row(Modifier.fillMaxSize().padding(horizontal = px.dp(12f))) {
+            for (m in content.metrics.take(3)) Box(Modifier.weight(1f)) { ChipMetric(m) }
+        }
+        is PanelContent.Card -> {
+            val first = content.body?.lineSequence()?.firstOrNull { it.isNotBlank() }
+                ?: content.bullets.firstOrNull()?.let { "▸ $it" } ?: ""
+            Text(
+                first,
+                style = JarvisType.Body.copy(sizePx = 20f).style(JarvisColors.TextPrimary).copy(lineHeight = px.sp(26f)),
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxSize().padding(horizontal = px.dp(12f)),
+            )
+        }
+        is PanelContent.ListBody -> Box(Modifier.fillMaxSize().padding(horizontal = px.dp(12f)), contentAlignment = Alignment.CenterStart) {
+            val done = content.items.count { it.done }
+            Text(
+                "${content.items.size} items · $done done",
+                style = JarvisType.Body.copy(sizePx = 22f).style(JarvisColors.CyanBright),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        is PanelContent.Timer -> TimerBody(content, onAcknowledgeTimer, compact = true)
+    }
+}
+
+@Composable
+private fun ChipMetric(m: Metric) {
+    val px = LocalPx.current
+    val valueStyle = JarvisType.MetricCompact.style(JarvisColors.CyanBright).copy(lineHeight = px.sp(44f))
+    Column {
+        Text(
+            m.value + if (m.unitAttached) (m.unit ?: "") else "",
+            style = valueStyle, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip,
+        )
+        Text(
+            m.label.uppercase(),
+            style = JarvisType.StatusBar.copy(sizePx = 14f).style(JarvisColors.TextSecondary).copy(lineHeight = px.sp(16f)),
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
 @Composable
 private fun CardBody(card: PanelContent.Card, onMore: () -> Unit) {
     val px = LocalPx.current
@@ -194,7 +241,7 @@ private fun ListRow(index: Int, item: ListItem, ordered: Boolean, highlighted: B
 }
 
 @Composable
-private fun TimerBody(timer: PanelContent.Timer, onAck: () -> Unit) {
+private fun TimerBody(timer: PanelContent.Timer, onAck: () -> Unit, compact: Boolean = false) {
     val px = LocalPx.current
     val now = remember { mutableLongStateOf(monoMillis()) }
     var blinkOn by remember { mutableStateOf(true) }
@@ -216,18 +263,22 @@ private fun TimerBody(timer: PanelContent.Timer, onAck: () -> Unit) {
     val ringing = rem <= 0
     val secs = if (ringing) 0L else ceil(rem / 1000.0).toLong()
     Row(
-        Modifier.fillMaxSize().padding(horizontal = px.dp(24f)).then(if (ringing) Modifier.clickable(onClick = onAck) else Modifier),
+        Modifier.fillMaxSize().padding(horizontal = px.dp(if (compact) 12f else 24f)).then(if (ringing) Modifier.clickable(onClick = onAck) else Modifier),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
             formatCountdown(secs),
-            style = JarvisType.TimerCountdown.style(if (ringing && !blinkOn) androidx.compose.ui.graphics.Color.Transparent else JarvisColors.CyanBright)
-                .copy(lineHeight = px.sp(88f)),
+            style = (if (compact) JarvisType.MetricCompact else JarvisType.TimerCountdown)
+                .style(if (ringing && !blinkOn) androidx.compose.ui.graphics.Color.Transparent else JarvisColors.CyanBright)
+                .copy(lineHeight = px.sp(if (compact) 44f else 88f)),
             maxLines = 1, softWrap = false,
         )
         if (ringing) {
             Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                Text("TAP TO DISMISS", style = JarvisType.HudLabel.style(JarvisColors.WarnAmber))
+                Text(
+                    if (compact) "TAP" else "TAP TO DISMISS",
+                    style = (if (compact) JarvisType.StatusBar else JarvisType.HudLabel).style(JarvisColors.WarnAmber),
+                )
             }
         }
     }
