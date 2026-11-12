@@ -68,6 +68,8 @@ data class AppState(
     val countdownStartMs: Long = 0L,
     val countdownEndMs: Long = 0L,
     val night: Boolean = false,
+    /** Perf HUD overlay (§3.6), toggled from the sim drawer or ADB `perfhud`; available in real mode too. */
+    val perfHud: Boolean = false,
 ) {
     /** Derived: number of panels in [panels]. */
     val panelCount: Int get() = panels.panels.size
@@ -127,6 +129,7 @@ sealed interface Intent : Input {
     data object DisplayPulse : Intent
     data object AttentionPulse : Intent
     data class SetNight(val night: Boolean) : Intent
+    data class SetPerfHud(val on: Boolean) : Intent
 }
 
 /** A transport event entering the store. */

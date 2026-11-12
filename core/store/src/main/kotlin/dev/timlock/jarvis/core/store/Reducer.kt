@@ -268,6 +268,7 @@ private class Ctx(var s: AppState, val now: Long) {
             Intent.DisplayPulse -> s = s.copy(pulseAtMs = now)
             Intent.AttentionPulse -> s = s.copy(attentionAtMs = now)
             is Intent.SetNight -> s = s.copy(night = input.night)
+            is Intent.SetPerfHud -> s = s.copy(perfHud = input.on)
             is Event -> event(input.event)
         }
     }
