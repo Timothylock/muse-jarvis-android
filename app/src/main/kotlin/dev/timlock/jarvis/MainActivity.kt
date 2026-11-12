@@ -42,6 +42,12 @@ import dev.timlock.jarvis.ui.hud.AmbientFace
 import dev.timlock.jarvis.ui.hud.FirstRunScreen
 import dev.timlock.jarvis.ui.hud.HudBackground
 import dev.timlock.jarvis.ui.hud.PairingPlaceholderScreen
+import dev.timlock.jarvis.ui.hud.ImportPairingScreen
+import dev.timlock.jarvis.ui.hud.ImportScreenState
+import dev.timlock.jarvis.ui.hud.JarvisColors
+import dev.timlock.jarvis.ui.hud.PairingLostBanner
+import androidx.compose.foundation.background
+import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.ui.hud.ProvidePx
 import dev.timlock.jarvis.ui.hud.SimFrame
 import dev.timlock.jarvis.ui.hud.SimInterstitial
@@ -112,6 +118,10 @@ class MainActivity : ComponentActivity() {
 private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) {
     val state by vm.store.state.collectAsState()
     var pairingOpen by remember { mutableStateOf(false) }
+    var importOpen by remember { mutableStateOf(false) }
+    val importStatus by AppGraph.pairing.status.collectAsState()
+    val lost = state.link is LinkState.PairingLost && state.mode == Mode.REAL
+    var bannerDismissed by remember(state.link) { mutableStateOf(false) }
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
     val simMode = state.mode == Mode.SIM
     LaunchedEffect(simMode) { if (!simMode) drawerOpen = false }
@@ -135,18 +145,29 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                 when {
                     state.mode == null && state.orbState == OrbState.BOOT -> Unit // loading persisted mode
                     interstitialUntil != null -> SimInterstitial()
+                    importOpen -> ImportPairingScreen(
+                        state = importScreenState(importStatus),
+                        onImport = { vm.importPairing(false) },
+                        onConfirmReplace = { vm.importPairing(true) },
+                        onBack = { importOpen = false; AppGraph.pairing.resetStatus() },
+                        modifier = Modifier.background(JarvisColors.BgVoid.copy(alpha = 0.88f)),
+                    )
                     pairingOpen -> PairingPlaceholderScreen(onBack = { pairingOpen = false })
                     state.mode == null -> FirstRunScreen(
                         onPair = { pairingOpen = true },
                         onSimulate = { vm.choose(Mode.SIM) },
-                        onImport = { pairingOpen = true },
+                        onImport = { importOpen = true; vm.importPairing(false) },
                         orb = {},
                     )
                     else -> AmbientFace(
                         mode = state.mode,
                         link = state.link,
                         orbState = state.orbState,
-                        onPttClick = { if (state.orbState == OrbState.UNPAIRED) pairingOpen = true },
+                        onPttClick = {
+                            if (state.orbState == OrbState.UNPAIRED) {
+                                if (state.mode == Mode.REAL) importOpen = true else pairingOpen = true
+                            }
+                        },
                         orb = {},
                         onSimChipClick = { drawerOpen = true },
                         hasDockedPanels = state.dockCount > 0,
@@ -170,6 +191,15 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
                         },
                     )
                 }
+                if (lost && !bannerDismissed && !importOpen && state.mode != null) {
+                    // §4.4: top of the content area (below the 48 px status bar). TODO(M7): Re-pair opens the BLE flow (P1).
+                    val px = LocalPx.current
+                    PairingLostBanner(
+                        onRepair = { importOpen = true },
+                        onLater = { bannerDismissed = true },
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = px.dp(56f)),
+                    )
+                }
                 if (interstitialUntil == null) {
                     if (state.perfHud) {
                         val perf by vm.perfHud.collectAsState()
@@ -181,6 +211,21 @@ private fun MuseDeskApp(vm: MainViewModel, onOrbView: (OrbSurfaceView) -> Unit) 
             }
             if (state.mode == Mode.SIM) SimFrame()
         }
+    }
+}
+
+private fun importScreenState(s: PairingController.Status): ImportScreenState {
+    val dir = AppGraph.pairing.importDir()?.path.orEmpty()
+    return when (s) {
+        PairingController.Status.Idle -> ImportScreenState(dropDir = dir)
+        PairingController.Status.Running -> ImportScreenState(dropDir = dir, busy = true)
+        is PairingController.Status.Imported -> ImportScreenState("Imported ${s.nodeId}", dropDir = dir, success = true)
+        is PairingController.Status.NoFiles -> ImportScreenState("No pairing files found in ${s.dir}", true, dropDir = dir)
+        is PairingController.Status.Invalid -> ImportScreenState("Invalid pairing files: ${s.reason}", true, dropDir = dir)
+        is PairingController.Status.Conflict -> ImportScreenState(
+            "Different identity already stored — confirm to replace", true, showConfirm = true, dropDir = dir,
+        )
+        is PairingController.Status.Failed -> ImportScreenState("Import failed: ${s.reason}", true, dropDir = dir)
     }
 }
 
