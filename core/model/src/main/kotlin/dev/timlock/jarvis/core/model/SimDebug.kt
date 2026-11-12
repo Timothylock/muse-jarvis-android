@@ -19,20 +19,7 @@ data class ScenarioRun(
 data class SimLogEntry(val atMs: Long, val text: String)
 
 /** Drawer sliders (§7.3). [admitMs]/[thinkMs] apply to free play and to scenarios that don't set them. */
-data class SimSettings(
-    val admitMs: Long = 800,
-    val thinkMs: Long = 2000,
-    val timescale: Float = 1f,
-    /** §7.1 SimLink: outcome of the next fake pairing, and whether it runs without the ~3 s of fake BLE progress. */
-    val pairOutcome: SimPairOutcome = SimPairOutcome.PAIRED,
-    val pairInstant: Boolean = false,
-)
-
-/** Configurable result of the simulated pairing window (ADB `--es outcome ...`). */
-enum class SimPairOutcome(val wire: String) {
-    PAIRED("paired"), ALREADY_PAIRED("already_paired"), INVALID_TOKEN("invalid_token"), WINDOW_CLOSED("window_closed"), BLE_ERROR("ble_error");
-    companion object { fun parse(s: String?): SimPairOutcome? = entries.firstOrNull { it.wire == s?.trim()?.lowercase() } }
-}
+data class SimSettings(val admitMs: Long = 800, val thinkMs: Long = 2000, val timescale: Float = 1f)
 
 /** §7.7 `cmd fault --es kind ...` and the drawer's Faults row. */
 enum class SimFault(val wire: String) {
