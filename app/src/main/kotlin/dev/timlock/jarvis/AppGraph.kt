@@ -9,7 +9,6 @@ import dev.timlock.jarvis.audio.MicSource
 import dev.timlock.jarvis.audio.Player
 import dev.timlock.jarvis.core.model.AudioVisualBus
 import dev.timlock.jarvis.core.model.Mode
-import dev.timlock.jarvis.core.secure.KeystoreCredentialStore
 import dev.timlock.jarvis.core.model.OrbStateHolder
 import dev.timlock.jarvis.core.model.monoMillis
 import dev.timlock.jarvis.core.store.AppStore
@@ -37,13 +36,6 @@ import kotlinx.coroutines.launch
 /** App-lifetime singletons (manual wiring, no DI). Started from [JarvisApp.onCreate]. */
 object AppGraph {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    /** App-lifetime scope (transports get their own child scopes from MainViewModel). */
-    val appScope: CoroutineScope get() = scope
-    lateinit var appContext: Context
-        private set
-    /** Encrypted credential files (§6.7). Created lazily: constructing it touches no keys. */
-    val credentials by lazy { KeystoreCredentialStore(appContext) }
-    val pairing by lazy { PairingController(appContext, credentials) { transport } }
 
     val store = AppStore(scope, logger = { Log.w("JARVIS_STORE", it) })
     val orbHolder = OrbStateHolder()
@@ -58,10 +50,6 @@ object AppGraph {
     /** True while the app wants RECORD_AUDIO and does not have it; MainActivity's helper requests it (§4.1 step 4). */
     val needsMicPermission: StateFlow<Boolean> = _needsMicPermission.asStateFlow()
     fun markMicPermissionRequested() { _needsMicPermission.value = false }
-    private val _needsNotifPermission = MutableStateFlow(false)
-    /** True once on entering REAL mode while POST_NOTIFICATIONS (API 33+) is not granted. */
-    val needsNotificationPermission: StateFlow<Boolean> = _needsNotifPermission.asStateFlow()
-    fun markNotificationPermissionRequested() { _needsNotifPermission.value = false }
     private val _perf = MutableStateFlow(PerfHudData())
     val perfHud: StateFlow<PerfHudData> = _perf.asStateFlow()
     lateinit var simController: SimController
@@ -76,7 +64,6 @@ object AppGraph {
         if (started) return
         started = true
         val app = context.applicationContext
-        appContext = app
         mic = MicSource(app, audioBus) { _needsMicPermission.value = true }
         earcons = Earcons(app)
         calls = CallController(scope, { transport }, mic, Player(audioBus)) { store.dispatch(it) }
@@ -88,17 +75,6 @@ object AppGraph {
         scope.launch {
             store.state.map { it.mode }.distinctUntilChanged().collect { m ->
                 if (m == Mode.SIM && !mic.hasPermission()) _needsMicPermission.value = true
-            }
-        }
-        // §6.8: the link service runs only in REAL mode; entering REAL also asks for the notification permission.
-        scope.launch {
-            store.state.map { it.mode }.distinctUntilChanged().collect { m ->
-                if (m == Mode.REAL) {
-                    if (android.os.Build.VERSION.SDK_INT >= 33 &&
-                        app.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
-                    ) _needsNotifPermission.value = true
-                    JarvisService.start(app)
-                } else JarvisService.stop(app)
             }
         }
         // Effects: log names only (never caption text).

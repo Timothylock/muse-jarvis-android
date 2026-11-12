@@ -117,7 +117,6 @@ class SimController(
         t.timescale = ts
         t.admitMs = _settings.value.admitMs
         freePlayJob?.cancel()
-        store.dispatch(Intent.ResetFallback) // scenarios must not inherit another run's fallback window
         val eng = ScenarioEngine(scope, host, anchors, ts, autoPttMs)
         engine = eng
         _run.value = ScenarioRun(id = id, step = 0, total = sc.steps.size, timescale = ts)

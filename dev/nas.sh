@@ -10,7 +10,7 @@
 #   dev/nas.sh start [extras]   am start MainActivity with optional extra args (e.g. --es jarvis.mode sim)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SSH=(ssh -F /home/hatch/.ssh/config -o ServerAliveInterval=15 -o ServerAliveCountMax=8 timothy@tim-nas)
+SSH=(ssh -F /home/hatch/.ssh/config timothy@tim-nas)
 # JARVIS_REMOTE_SUFFIX lets parallel worktrees build in separate NAS dirs (e.g. "-wt2").
 REMOTE=/volume2/docker/android-build/jarvis${JARVIS_REMOTE_SUFFIX:-}
 TOOLS=/volume2/docker/adb-tools
