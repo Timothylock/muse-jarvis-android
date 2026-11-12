@@ -15,6 +15,7 @@ import dev.timlock.jarvis.core.secure.CredentialNames
 import dev.timlock.jarvis.core.secure.CredentialStore
 import dev.timlock.jarvis.core.secure.PairingImport
 import dev.timlock.jarvis.core.secure.Redactor
+import dev.timlock.jarvis.core.transport.BlePeripheral
 import dev.timlock.jarvis.core.transport.CallHandle
 import dev.timlock.jarvis.core.transport.FallbackTurn
 import dev.timlock.jarvis.core.transport.GadgetTransport
@@ -26,6 +27,8 @@ import dev.timlock.jarvis.core.transport.SdkToken
 import dev.timlock.jarvis.core.transport.TransportEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -45,6 +48,7 @@ import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Real transport: the upstream musegadget SDK (vendored, unmodified) embedded with Chaquopy (§6.5). The ONLY code
@@ -73,7 +77,7 @@ class SdkTransport(
     private val fallbacks = ConcurrentHashMap<String, CompletableDeferred<FallbackTurn>>()
 
     /** M7: set by :app before [pair] (the BLE byte pipe and the network check live outside this module). */
-    @Volatile var peripheral: dev.timlock.jarvis.core.transport.BlePeripheral? = null
+    @Volatile var peripheral: BlePeripheral? = null
     @Volatile var network: dev.timlock.jarvis.core.transport.NetworkStatus? = null
 
     /** Set by [stop]; a transport is single-use, so a start racing a stop must not bring Python up again. */
@@ -124,7 +128,68 @@ class SdkTransport(
         _link.value = LinkState.Offline("stopped")
     }
 
-    override suspend fun pair(token: SdkToken, ui: PairingUiSink) = PairOutcome.BLE_ERROR // TODO(M7): BLE pairing
+    private val pairingActive = AtomicBoolean(false)
+    @Volatile internal var selfTestListener: BlePeripheral.Listener? = null
+
+    /**
+     * M7 BLE setup (§6.6): runs jarvis_bridge.pair_run (a mirror of musegadget.pair.pair) on an IO thread while the
+     * service loop keeps polling. Needs [peripheral] and [network]; a second concurrent call is rejected. Cancelling
+     * the caller stops the window and closes the peripheral promptly. A well-formed [token] is stored (and wins over
+     * a previously stored one); on success the Python side kicks the service so it connects immediately.
+     */
+    override suspend fun pair(token: SdkToken, ui: PairingUiSink): PairOutcome {
+        val b = bridge ?: return PairOutcome.BLE_ERROR
+        val p = peripheral ?: return PairOutcome.BLE_ERROR
+        val n = network ?: return PairOutcome.BLE_ERROR
+        if (!pairingActive.compareAndSet(false, true)) return PairOutcome.BLE_ERROR
+        try {
+            if (token.isWellFormed()) {
+                withContext(Dispatchers.IO) {
+                    store.write(CredentialNames.SDK_TOKEN, token.value.trim().toByteArray(Charsets.UTF_8))
+                }
+            }
+            val listener = PairListener(b)
+            return coroutineScope {
+                val run = async(Dispatchers.IO) {
+                    PairOutcome.valueOf(b.callAttr("pair_run", p, n, ui, token.value, false, listener).toString())
+                }
+                try {
+                    run.await()
+                } catch (c: CancellationException) {
+                    withContext(NonCancellable) {
+                        runCatching { b.callAttr("pair_cancel") }
+                        runCatching { run.join() }
+                        runCatching { b.callAttr("pair_clear_cancel") }
+                    }
+                    throw c
+                }
+            }
+        } catch (c: CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            Log.w(TAG, "pair failed: " + Redactor.redact(t.toString()).take(200))
+            return PairOutcome.BLE_ERROR
+        } finally {
+            pairingActive.set(false)
+        }
+    }
+
+    /**
+     * Headless verification (`adb ... cmd pair_selftest`): the full setup protocol over an in-process loopback, no
+     * radio, nothing saved, no network. Returns the Python result JSON. Phone writes re-enter through the same
+     * listener -> bridge.pair_write path the GATT server uses.
+     */
+    suspend fun pairSelfTest(mtu: Int): String {
+        val b = bridge ?: return "{\"ok\":false,\"error\":\"not_started\"}"
+        if (!pairingActive.compareAndSet(false, true)) return "{\"ok\":false,\"error\":\"busy\"}"
+        try {
+            selfTestListener = PairListener(b)
+            return withContext(Dispatchers.IO) { b.callAttr("pair_selftest", mtu).toString() }
+        } finally {
+            selfTestListener = null
+            pairingActive.set(false)
+        }
+    }
 
     /** Validates + stores via [PairingImport], then restarts the service loop. */
     override suspend fun importPairing(bundle: PairingBundle): ImportResult {

@@ -3,7 +3,12 @@ package dev.timlock.jarvis
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.bluetooth.BluetoothManager
 import android.util.Log
+import dev.timlock.jarvis.core.transport.BlePeripheral
+import dev.timlock.jarvis.feature.pairing.ble.AndroidBlePeripheral
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
 import dev.timlock.jarvis.core.model.OrbState
@@ -31,7 +36,7 @@ class SimCommandReceiver : BroadcastReceiver() {
         val cmd = intent.getStringExtra("cmd") ?: ""
         val value = intent.getStringExtra("value")
         if (cmd == "display" || cmd == "preset" || cmd in REAL_ASYNC_CMDS) {
-            handleAsync(cmd, intent)
+            handleAsync(context.applicationContext, cmd, intent)
             return
         }
         val result = try {
@@ -43,20 +48,24 @@ class SimCommandReceiver : BroadcastReceiver() {
     }
 
     /** §7.7 `cmd display`: inject a display command through the sim transport and log the validator result. */
-    private fun handleAsync(cmd: String, intent: Intent) {
+    private fun handleAsync(context: Context, cmd: String, intent: Intent) {
         val pending = goAsync()
+        // ble_smoke holds the radio for many seconds: release the broadcast first (10 s limit); the result is logged later.
+        var finished = false
+        fun finishOnce() { if (!finished) { finished = true; pending.finish() } }
+        if (cmd == "ble_smoke") finishOnce()
         CoroutineScope(Dispatchers.Default).launch {
             val result = try {
                 when (cmd) {
                     "display" -> displayResult(intent)
                     "preset" -> presetResult(intent)
-                    else -> realResult(cmd, intent)
+                    else -> realResult(context, cmd, intent)
                 }
             } catch (t: Throwable) {
                 fail(cmd, "internal: ${t.javaClass.simpleName}")
             }
             Log.i("JARVIS_SIM", result.toString())
-            pending.finish()
+            finishOnce()
         }
     }
 
@@ -64,7 +73,7 @@ class SimCommandReceiver : BroadcastReceiver() {
      * Real-mode commands (pairing material; never SIM injection, §7.7). Results carry node ids and token hints only.
      * `import_pairing [--ez overwrite true]`, `export_identity`, `provision_token --es token mgst_...`, `unpair`.
      */
-    private suspend fun realResult(cmd: String, intent: Intent): JSONObject {
+    private suspend fun realResult(context: Context, cmd: String, intent: Intent): JSONObject {
         val mode = AppGraph.store.state.value.mode
         if (mode == Mode.SIM) return fail(cmd, "not available in sim mode")
         val pairing = AppGraph.pairing
@@ -88,15 +97,23 @@ class SimCommandReceiver : BroadcastReceiver() {
                 JSONObject().put("cmd", cmd).put("ok", true).put("node_id", nodeId).put("path", path)
             }
             "provision_token" -> {
-                val raw = intent.getStringExtra("token")
-                // §4.2 P1: while the pairing flow is open, provisioning goes through it (accepted only on P1);
-                // otherwise the M6 controller path stores the token directly.
-                val flow = AppGraph.pairingFlow.value
-                val err = if (flow != null) flow.provisionToken(raw) else pairing.provisionToken(raw)
+                val err = pairing.provisionToken(intent.getStringExtra("token"))
                 if (err != null) fail(cmd, err) else {
-                    val hint = SdkToken(raw.orEmpty()).hint()
+                    val hint = SdkToken(intent.getStringExtra("token").orEmpty()).hint()
                     JSONObject().put("cmd", cmd).put("ok", true).put("hint", hint)
                 }
+            }
+            "pair_selftest" -> {
+                if (mode != Mode.REAL) return fail(cmd, "real mode required (start with --es jarvis.mode real)")
+                val t = AppGraph.transport as? SdkTransport ?: return fail(cmd, "no sdk transport")
+                val r185 = JSONObject(t.pairSelfTest(185))
+                val r23 = JSONObject(t.pairSelfTest(23))
+                JSONObject().put("cmd", cmd).put("ok", r185.optBoolean("ok") && r23.optBoolean("ok"))
+                    .put("mtu185", r185).put("mtu23", r23).put("statuses", r185.opt("statuses") ?: JSONObject.NULL)
+            }
+            "ble_smoke" -> {
+                if (mode != Mode.REAL) return fail(cmd, "real mode required (start with --es jarvis.mode real)")
+                bleSmoke(context, intent.getLongExtra("ms", 15_000L).coerceIn(1_000L, 60_000L))
             }
             "unpair" -> {
                 if (mode != Mode.REAL) return fail(cmd, "real mode required")
@@ -106,6 +123,38 @@ class SimCommandReceiver : BroadcastReceiver() {
             }
             else -> fail(cmd, "unknown cmd")
         }
+    }
+
+    /** Opens the real GATT peripheral under a fixed test name (no Muse/SDK involvement), holds it, closes, checks the name. */
+    private suspend fun bleSmoke(context: Context, ms: Long): JSONObject = withContext(Dispatchers.IO) {
+        val cmd = "ble_smoke"
+        val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
+        fun adapterName(): String? = try { adapter?.name } catch (e: SecurityException) { null }
+        val before = adapterName()
+        val p = AndroidBlePeripheral(context)
+        val result = JSONObject().put("cmd", cmd)
+        val readiness = p.readinessProblem()
+        result.put("readinessProblem", readiness ?: JSONObject.NULL)
+        result.put("multipleAdvertisementSupported", p.multipleAdvertisementSupported())
+        if (readiness != null) return@withContext result.put("ok", false).put("open", "skipped")
+        var connects = 0
+        var writes = 0
+        val opened = p.open("MuseDeskSmoke", object : BlePeripheral.Listener {
+            override fun onConnected() { connects++ }
+            override fun onWrite(packet: ByteArray) { writes++ }
+            override fun onDisconnected() {}
+        })
+        result.put("open", opened ?: "ok")
+        result.put("nameDuringWindow", adapterName() == "MuseDeskSmoke")
+        if (opened == null) delay(ms)
+        p.close()
+        var restored = before == null
+        val end = System.currentTimeMillis() + 3_000
+        while (!restored && System.currentTimeMillis() < end) { restored = adapterName() == before; if (!restored) delay(100) }
+        result.put("serviceAddedStatus", p.lastServiceAddedStatus ?: JSONObject.NULL)
+        result.put("adapterNameRestored", restored)
+        result.put("centralsConnected", connects).put("writesReceived", writes)
+        result.put("ok", opened == null && restored && p.lastServiceAddedStatus == 0)
     }
 
     private suspend fun displayResult(intent: Intent): JSONObject {
@@ -193,7 +242,7 @@ class SimCommandReceiver : BroadcastReceiver() {
     }
 
     private companion object {
-        val REAL_ASYNC_CMDS = setOf("import_pairing", "export_identity", "provision_token", "unpair")
+        val REAL_ASYNC_CMDS = setOf("import_pairing", "export_identity", "provision_token", "unpair", "pair_selftest", "ble_smoke")
         val SIM_CMDS = setOf("state", "ptt", "scenario", "stop", "pause", "fault", "repair", "reload", "list", "hangup")
     }
 

@@ -22,8 +22,6 @@ import dev.timlock.jarvis.core.transport.FallbackTurn
 import dev.timlock.jarvis.core.transport.GadgetTransport
 import dev.timlock.jarvis.core.transport.ImportResult
 import dev.timlock.jarvis.core.transport.PairOutcome
-import dev.timlock.jarvis.core.transport.PairingStage
-import dev.timlock.jarvis.core.model.SimPairOutcome
 import dev.timlock.jarvis.core.transport.PairingBundle
 import dev.timlock.jarvis.core.transport.PairingUiSink
 import dev.timlock.jarvis.core.transport.PcmSink
@@ -49,9 +47,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "JARVIS_SIM"
-private const val SIM_BLE_NAME = "MuseGadgetSIM001"
-private const val PAIR_TOTAL_MS = 3_000L
-private const val PAIR_WINDOW_S = 600
 private const val NODE_ID = "sim-node-0001"
 private const val VM_NAME = "Simulated VM"
 private const val READY_TIMEOUT_MS = 35_000L
@@ -80,47 +75,14 @@ class SimTransport : GadgetTransport {
         scope.coroutineContext[Job]?.children?.forEach { it.cancel() }
     }
 
-    /** §7.1 SimLink pairing options (set by [SimController]); [timescale] scales the fake BLE progress. */
-    @Volatile var pairOutcome: SimPairOutcome = SimPairOutcome.PAIRED
-    @Volatile var pairInstant: Boolean = false
-
-    /** Fake BLE pairing: window open -> ADVERTISING -> CONNECTED -> SECURE -> SAVED over ~3 s (0 when [pairInstant]). */
     override suspend fun pair(token: SdkToken, ui: PairingUiSink): PairOutcome {
-        val outcome = pairOutcome
-        val perStage = if (pairInstant) 0L else scaled(PAIR_TOTAL_MS / PairingStage.ORDER.size)
-        var elapsedMs = 0L
-        suspend fun wait(ms: Long) {
-            if (ms > 0) delay(ms)
-            elapsedMs += ms
-            ui.onWindowRemaining((PAIR_WINDOW_S - (elapsedMs / 1000).toInt()).coerceAtLeast(0))
+        // TODO(M7): configurable duration / instant option and fake BLE progress stages.
+        for (i in 1..4) {
+            ui.onProgress("sim-step-$i", i / 4f)
+            ui.onWindowRemaining(180 - i * 30)
+            delay(500)
         }
-        note("{\"cmd\":\"pair\",\"outcome\":\"${outcome.wire}\",\"instant\":$pairInstant}")
-        if (!token.isWellFormed() || outcome == SimPairOutcome.INVALID_TOKEN) {
-            wait(perStage)
-            ui.onTokenProblem("sdk_token must be \"mgst_\" followed by 42 characters and a valid final character (simulated)")
-            return PairOutcome.INVALID_SDK_TOKEN
-        }
-        if (outcome == SimPairOutcome.ALREADY_PAIRED) { wait(perStage); return PairOutcome.ALREADY_PAIRED }
-        ui.onWindowOpen(SIM_BLE_NAME, PAIR_WINDOW_S, true)
-        ui.onWindowRemaining(PAIR_WINDOW_S)
-        val stages = when (outcome) {
-            SimPairOutcome.PAIRED -> PairingStage.ORDER.size
-            SimPairOutcome.BLE_ERROR -> 2
-            else -> 1 // WINDOW_CLOSED: advertising, then nobody comes
-        }
-        for (i in 0 until stages) {
-            wait(perStage)
-            ui.onProgress(PairingStage.ORDER[i], (i + 1f) / PairingStage.ORDER.size)
-        }
-        return when (outcome) {
-            SimPairOutcome.WINDOW_CLOSED -> { wait(perStage * 2); PairOutcome.WINDOW_CLOSED }
-            SimPairOutcome.BLE_ERROR -> { wait(perStage); PairOutcome.BLE_ERROR }
-            else -> {
-                // Stands in for the real transport restarting its link with the new pairing.
-                setLink(LinkState.Online(NODE_ID, VM_NAME))
-                PairOutcome.PAIRED
-            }
-        }
+        return PairOutcome.PAIRED
     }
 
     override suspend fun importPairing(bundle: PairingBundle): ImportResult = ImportResult(ok = true)
