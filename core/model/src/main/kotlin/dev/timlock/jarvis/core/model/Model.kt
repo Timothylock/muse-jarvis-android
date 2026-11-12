@@ -31,3 +31,9 @@ data class CommandResult(val ok: Boolean, val payloadJson: String? = null, val e
         fun error(message: String) = CommandResult(false, null, message)
     }
 }
+
+/**
+ * Caption bar line (§2.5): the most recent utterance. [role] null = system line (e.g. "Offline — reconnecting").
+ * [text] may be server content: never log it. [atMs] monotonic; the UI types it in (review C10) from [atMs].
+ */
+data class Caption(val text: String, val role: Role?, val final: Boolean, val atMs: Long)
