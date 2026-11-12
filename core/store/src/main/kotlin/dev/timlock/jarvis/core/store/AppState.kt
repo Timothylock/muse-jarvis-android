@@ -121,6 +121,8 @@ sealed interface Intent : Input {
     /** Playback drained; the reducer applies the 200 ms settle. */
     data object SinkDrained : Intent
     data object Tick : Intent
+    /** Forget realtime admission failures and leave the fallback window (sim scenario start; each scenario starts clean). */
+    data object ResetFallback : Intent
 
     data object PairingOpen : Intent
     data class PairingClosed(val paired: Boolean) : Intent
