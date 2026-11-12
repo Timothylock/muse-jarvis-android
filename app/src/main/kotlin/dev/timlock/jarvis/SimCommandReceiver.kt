@@ -241,13 +241,50 @@ class SimCommandReceiver : BroadcastReceiver() {
             "list" -> JSONObject().put("cmd", cmd).put("ok", true)
                 .put("scenarios", JSONArray().also { a -> sim.scenarios.value.forEach { a.put(it.id) } })
             "hangup" -> { store.dispatch(StoreIntent.HangUp); JSONObject().put("cmd", cmd).put("ok", true) }
+            "pairflow" -> pairFlow(intent, value)
             else -> fail(cmd, "unknown cmd")
         }
     }
 
+    /**
+     * Sim-only driver for the §4.2 pairing screens (screenshots / headless checks):
+     * `--es value open|next|cancel|retry|continue|back|status [--es outcome paired|window_closed|ble_error|invalid_token|already_paired] [--ef timescale F]`.
+     * `next` fills P1 with an obviously fake, well-formed token; sim pairing never stores credentials.
+     */
+    private fun pairFlow(intent: Intent, value: String?): JSONObject {
+        val cmd = "pairflow"
+        val sim = AppGraph.simController
+        if (intent.hasExtra("outcome") || intent.hasExtra("timescale")) {
+            var s = sim.settings.value
+            intent.getStringExtra("outcome")?.let { o ->
+                s = s.copy(pairOutcome = dev.timlock.jarvis.core.model.SimPairOutcome.parse(o) ?: return fail(cmd, "unknown outcome"))
+            }
+            if (intent.hasExtra("timescale")) s = s.copy(timescale = intent.getFloatExtra("timescale", 1f))
+            sim.updateSettings(s)
+        }
+        val v = value?.trim()?.lowercase() ?: "status"
+        if (v == "open") { AppGraph.openPairing(); return ok(cmd, v) }
+        val flow = AppGraph.pairingFlow.value ?: return fail(cmd, "no pairing flow open")
+        when (v) {
+            "next" -> { flow.onTokenChanged(FAKE_SIM_TOKEN); flow.next() }
+            "cancel" -> flow.cancel()
+            "retry" -> flow.retry()
+            "continue" -> flow.continueAfterResult()
+            "back" -> flow.backToToken()
+            "status" -> Unit
+            else -> return fail(cmd, "value must be open|next|cancel|retry|continue|back|status")
+        }
+        val st = flow.state.value
+        return JSONObject().put("cmd", cmd).put("ok", true).put("value", v)
+            .put("step", st.step.name.lowercase()).put("stages", st.stagesReached)
+            .put("result", st.result?.name?.lowercase() ?: JSONObject.NULL)
+    }
+
     private companion object {
         val REAL_ASYNC_CMDS = setOf("import_pairing", "export_identity", "provision_token", "unpair", "pair_selftest", "ble_smoke")
-        val SIM_CMDS = setOf("state", "ptt", "scenario", "stop", "pause", "fault", "repair", "reload", "list", "hangup")
+        val SIM_CMDS = setOf("state", "ptt", "scenario", "stop", "pause", "fault", "repair", "reload", "list", "hangup", "pairflow")
+        /** Fake, format-valid token for sim pairing screenshots only (sim never stores or sends it). */
+        const val FAKE_SIM_TOKEN = "mgst_SIMULATIONxONLYxNOTxAxREALxTOKENxxxxxxxxxxA"
     }
 
     private fun ok(cmd: String, value: String) = JSONObject().put("cmd", cmd).put("ok", true).put("value", value)
