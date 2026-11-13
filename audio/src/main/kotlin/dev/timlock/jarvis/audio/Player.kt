@@ -46,6 +46,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
     private var track: AudioTrack? = null
     private var lastAcceptNs = 0L
     @Volatile private var lastWriteNs = 0L   // last write() arrival; drives the jitter-cushion quiet check
+    @Volatile private var lastDrainedNs = 0L // last utterance drain; a quick follow-on sentence re-arms cheaper
     private var accepted = 0L            // samples accepted by the track since the last flush
     private var latencyFrames = LATENCY_FRAMES
     private val analyzer = LevelAnalyzer(RATE)
@@ -159,7 +160,11 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
                     if (chunkLen > 0 && chunkEpoch != epoch) { chunkLen = 0; chunkOff = 0 } // flushed while pending
                     if (chunkLen == 0 && rCount > 0) {
                         val quietMs = (System.nanoTime() - lastWriteNs) / 1_000_000L
-                        val need = if (utter == Utter.IDLE) PREBUFFER_SAMPLES else REBUFFER_SAMPLES
+                        // A sentence that follows the previous one within a couple of seconds is a
+                        // continuation, not a cold start: re-arm with the small cushion so the gap
+                        // between sentences stays a natural pause instead of a refill stall.
+                        val cont = System.nanoTime() - lastDrainedNs < CONT_WINDOW_NS
+                        val need = if (utter == Utter.IDLE && !cont) PREBUFFER_SAMPLES else REBUFFER_SAMPLES
                         if (rCount < need && quietMs < FEED_QUIET_MS) {
                             deferred = true // cushion still building; leave the audio in the ring
                         } else {
@@ -231,6 +236,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
             if (utter != Utter.IDLE && rCount == 0 && head >= accepted && accepted > 0) {
                 if (utter == Utter.PENDING) fire1 = true
                 utter = Utter.IDLE
+                lastDrainedNs = System.nanoTime()
                 fire2 = true
                 decayActive = true
                 decayEnv = levelEnvAt(head)
@@ -303,5 +309,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
         private const val REBUFFER_SAMPLES = RATE * 300 / 1000
         /** Feed quiet for this long = utterance is shorter than the cushion; start with what we have. */
         private const val FEED_QUIET_MS = 150L
+        /** A new utterance starting within this window of the last drain counts as a continuation. */
+        private const val CONT_WINDOW_NS = 2_500_000_000L
     }
 }

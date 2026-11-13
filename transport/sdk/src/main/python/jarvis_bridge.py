@@ -1068,6 +1068,8 @@ class CallRunner:
         self.task = None
         self.hangup = False
         self.stop_evt = asyncio.Event()
+        self._user_done = ""     # completed items of the user's current turn, joined
+        self._user_partial = ""  # deltas of the user's in-flight item
 
     # ---- Kotlin-facing (any thread) ----
     def push(self, data):
@@ -1109,6 +1111,8 @@ class CallRunner:
     def _tap(self, event):
         kind = event.get("type")
         if kind == "hatch.voice.turn_started":
+            self._user_done = ""
+            self._user_partial = ""
             mid = event.get("submission_message_id")
             if isinstance(mid, str) and mid:
                 HOST.onTurn(self.call_id, True, mid)
@@ -1121,7 +1125,27 @@ class CallRunner:
             if t is not None:
                 text = event.get(t[2])
                 if isinstance(text, str) and text:
-                    HOST.onTranscript(self.call_id, t[0], text, t[1])  # text goes to Kotlin only, never logged
+                    if t[0] == "user":
+                        # The service emits the user's speech as per-item fragments (deltas, then a
+                        # completed item). Forwarded raw, the caption bar only ever shows the latest
+                        # few words (Timothy, 2026-11-12). Accumulate across the whole turn instead:
+                        # deltas extend the in-flight item; a completed item folds into the turn text.
+                        if t[1]:
+                            self._user_done = (self._user_done + " " + text.strip()).strip()
+                            self._user_partial = ""
+                            HOST.onTranscript(self.call_id, "user", self._user_done, True)
+                        else:
+                            # Append fragments; if a sender ever switches to cumulative partials
+                            # (each one extending the last), adopt the longer text instead.
+                            if self._user_partial and text.startswith(self._user_partial):
+                                self._user_partial = text
+                            else:
+                                self._user_partial += text
+                            whole = (self._user_done + " " + self._user_partial).strip() \
+                                if self._user_done else self._user_partial
+                            HOST.onTranscript(self.call_id, "user", whole, False)
+                    else:
+                        HOST.onTranscript(self.call_id, t[0], text, t[1])  # text goes to Kotlin only, never logged
 
     async def _watch(self, call):
         announced = False
