@@ -139,12 +139,16 @@ private class Ctx(var s: AppState, val now: Long) {
         caption?.let { setCaption(it, null, true) }
     }
 
-    /** Sets [AppState.caption] (and keeps emitting [Effect.ShowCaption]). Partials that extend the previous partial continue typing (C10). */
+    /**
+     * Sets [AppState.caption] (and keeps emitting [Effect.ShowCaption]). Text that extends the previous caption of the
+     * same role continues typing (C10) — also after a final: the bridge folds a completed STT item into the hold's
+     * text and the next delta extends it, which must not retype from character 0 (Fable audit A2 #2).
+     */
     fun setCaption(text: String, role: Role?, final: Boolean) {
         val prev = s.caption
         val r = if (role == Role.SYSTEM) null else role
         var at = now
-        if (prev != null && prev.role == r && !prev.final && text.startsWith(prev.text)) {
+        if (prev != null && prev.role == r && text.startsWith(prev.text)) {
             val typed = minOf(prev.text.length.toLong(), (now - prev.atMs).coerceAtLeast(0) * CAPTION_CPS / 1000)
             at = now - typed * 1000 / CAPTION_CPS
         }

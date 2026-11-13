@@ -29,6 +29,21 @@ fun typedChars(elapsedMs: Long, length: Int): Int =
     (elapsedMs.coerceAtLeast(0) * CAPTION_CHARS_PER_SEC / 1000).coerceAtMost(length.toLong()).toInt()
 
 /**
+ * USER captions keep their newest words visible: the bar holds ~2 lines, and a long hold must not freeze on its first
+ * two lines while the user keeps talking (Fable audit A2 #3). Longer than [USER_TAIL_CHARS] -> leading ellipsis + tail,
+ * cut at a word boundary when one is close. MUSE/system captions keep head truncation (maxLines + ellipsis).
+ */
+const val USER_TAIL_CHARS = 150
+
+fun userCaptionTail(text: String, max: Int = USER_TAIL_CHARS): String {
+    if (text.length <= max) return text
+    var tail = text.takeLast(max - 1)
+    val sp = tail.indexOf(' ')
+    if (sp in 0..20) tail = tail.substring(sp + 1)
+    return "…$tail"
+}
+
+/**
  * §2.5 captions bar text (C10 typewriter, H3 no marquee: at most 2 lines, ellipsis). `YOU ›` text.secondary,
  * `MUSE ›` text.primary, system lines text.secondary without a prefix; `SIM ›` (violet, via [SimStyling]) in sim mode.
  * Recomposes at frame rate only while typing.
@@ -56,7 +71,8 @@ fun CaptionText(caption: Caption, sim: Boolean, modifier: Modifier = Modifier) {
             else -> Unit
         }
         withStyle(SpanStyle(color = body)) {
-            append(caption.text.take(typed))
+            val shown = caption.text.take(typed)
+            append(if (caption.role == Role.USER) userCaptionTail(shown) else shown)
             if (typing) append(CURSOR)
         }
     }
