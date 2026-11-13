@@ -19,7 +19,11 @@ import dev.timlock.jarvis.core.model.UserConfig
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import dev.timlock.jarvis.core.model.monoMillis
+import dev.timlock.jarvis.core.model.Role
+import dev.timlock.jarvis.core.model.TransportKind
 import dev.timlock.jarvis.core.store.AppStore
+import dev.timlock.jarvis.core.store.Event
+import dev.timlock.jarvis.core.transport.TransportEvent
 import dev.timlock.jarvis.core.store.EarconKind
 import dev.timlock.jarvis.core.store.Effect
 import dev.timlock.jarvis.core.store.HapticKind
@@ -38,10 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -117,7 +118,7 @@ object AppGraph {
                 }
                 lateinit var flow: PairingFlow
                 flow = PairingFlow(
-                    AppPairingDeps(sim, appContext, credentials, store) { transport },
+                    AppPairingDeps(sim, appContext, credentials, store, repair && !sim) { transport },
                     scope,
                     onExit = { exit ->
                         _pairingFlow.compareAndSet(flow, null)
@@ -152,7 +153,7 @@ object AppGraph {
         started = true
         val app = context.applicationContext
         appContext = app
-        mic = MicSource(app, audioBus) { _needsMicPermission.value = true }
+        mic = MicSource(app, audioBus) { onMicPermissionMissing() }
         earcons = Earcons(app)
         calls = CallController(scope, { transport }, mic, Player(audioBus)) { store.dispatch(it) }
         devSettings = DevSettings(app)
@@ -207,17 +208,6 @@ object AppGraph {
                 }
             }
         }
-        // §5.5 sticky/timer persistence: save on PersistPanels (own collector, so a slow save never delays other
-        // effects; the Mutex in PanelStore serializes writes; the reducer only emits in REAL mode).
-        val panelStore = PanelStore(app)
-        scope.launch {
-            store.effects.filterIsInstance<Effect.PersistPanels>().conflate().collect { panelStore.save(it.stack) }
-        }
-        // Restore once per process, when REAL mode is first seen after BootComplete (never in SIM).
-        scope.launch {
-            store.state.first { it.mode == Mode.REAL && it.machine != dev.timlock.jarvis.core.model.OrbState.BOOT }
-            panelStore.load()?.takeIf { it.panels.isNotEmpty() }?.let { store.dispatch(Intent.RestorePanels(it)) }
-        }
         // Call/audio effects: one coroutine, strictly in order.
         scope.launch { store.effects.collect { calls.handle(it) } }
         // Perf HUD sampler (1 Hz, only while the HUD is on; works in real mode too).
@@ -241,6 +231,20 @@ object AppGraph {
                 if (s.mode == Mode.SIM) levels.step(s.orbState, monoMillis(), driveOut = false, driveMic = !mic.hasPermission())
             }
         }
+    }
+
+    /**
+     * RECORD_AUDIO missing when a capture starts (Fable 17): request it, and in REAL mode end the call/PTT through the
+     * normal HangUp intent (so the orb never says LISTENING over silence) and say why with a system caption. Sim keeps
+     * running on its synthetic mic levels.
+     */
+    private fun onMicPermissionMissing() {
+        _needsMicPermission.value = true
+        if (store.state.value.mode != Mode.REAL) return
+        store.dispatch(Intent.HangUp)
+        store.dispatch(
+            Event(TransportEvent.Transcript(Role.SYSTEM, "Microphone permission needed", true, TransportKind.REAL)),
+        )
     }
 
     /** ~3 short beeps; ToneGenerator is released after the pattern. */

@@ -140,7 +140,11 @@ class PairingFlow(
         goBluetooth()
     }
 
-    /** NEXT with a valid entered token: store it, continue. */
+    /**
+     * NEXT with a valid entered token: stage it in memory and continue. It is handed to [PairingDeps.pair] and only
+     * persisted ([PairingDeps.saveToken]) once pairing succeeds, so a failed or abandoned attempt can never replace
+     * the token of an existing pairing.
+     */
     fun next() {
         val s = _state.value
         if (s.step != PairStep.TOKEN) return
@@ -149,25 +153,21 @@ class PairingFlow(
             return
         }
         scope.launch {
-            val t = SdkToken(s.entered.trim())
-            deps.saveToken(t)
-            token = t
-            _state.update { it.copy(storedLast4 = t.value.takeLast(4)) }
+            token = SdkToken(s.entered.trim())
             goBluetooth()
         }
     }
 
     /**
-     * ADB `provision_token`: accepted only while on P1. Stores the token and fills the (masked) field.
-     * Returns null on success, else an error text (never the token).
+     * ADB `provision_token`: accepted only while on P1. Stages the token (fills the masked field); nothing is written
+     * to the credential store until pairing succeeds. Returns null on success, else an error text (never the token).
      */
     suspend fun provisionToken(raw: String?): String? {
         if (_state.value.step != PairStep.TOKEN) return NOT_ON_TOKEN_SCREEN
         val t = SdkToken(raw.orEmpty())
         if (!t.isWellFormed()) return "malformed token"
         val clean = SdkToken(t.value.trim())
-        deps.saveToken(clean)
-        _state.update { it.copy(entered = clean.value, replacing = true, tokenNote = null, storedLast4 = clean.value.takeLast(4)) }
+        _state.update { it.copy(entered = clean.value, replacing = true, tokenNote = null) }
         return null
     }
 
@@ -228,6 +228,11 @@ class PairingFlow(
         closeWindow(paired = outcome == PairOutcome.PAIRED || outcome == PairOutcome.ALREADY_PAIRED)
         when (outcome) {
             PairOutcome.PAIRED -> {
+                // Promote the staged token (the real transport has already stored it; this keeps the deps in step).
+                token?.let { t ->
+                    try { deps.saveToken(t) } catch (e: Exception) { /* the transport promoted it already */ }
+                    _state.update { it.copy(storedLast4 = t.value.trim().takeLast(4)) }
+                }
                 _state.update { it.copy(step = PairStep.RESULT, result = ResultKind.PAIRED, nodeId = deps.nodeId(), failures = 0) }
                 continueJob = scope.launch {
                     // The node id may only be known once the link comes up; refresh while the success screen is showing.

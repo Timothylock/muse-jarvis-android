@@ -80,6 +80,8 @@ class TestInputController(
                 if (s0.link !is LinkState.Online) return fail(cmd, "link not online")
             }
             if (s0.ptt != PttState.Up) return fail(cmd, "busy")
+            // STANDBY = an ordinary (non-test) call is still open; injecting would land in it. Hang up first.
+            if (s0.orbState == OrbState.STANDBY) return fail(cmd, "orb state standby: a call is open (hang up first)")
             if (s0.orbState in BAD_ORBS) return fail(cmd, "orb state ${s0.orbState.name.lowercase()} not allowed")
             val file = File(wavDir(), "$name.wav")
             if (!file.isFile) return fail(cmd, "no such wav")

@@ -85,7 +85,7 @@ class SimTransport : GadgetTransport {
     @Volatile var pairInstant: Boolean = false
 
     /** Fake BLE pairing: window open -> ADVERTISING -> CONNECTED -> SECURE -> SAVED over ~3 s (0 when [pairInstant]). */
-    override suspend fun pair(token: SdkToken, ui: PairingUiSink): PairOutcome {
+    override suspend fun pair(token: SdkToken, ui: PairingUiSink, force: Boolean): PairOutcome {
         val outcome = pairOutcome
         val perStage = if (pairInstant) 0L else scaled(PAIR_TOTAL_MS / PairingStage.ORDER.size)
         var elapsedMs = 0L

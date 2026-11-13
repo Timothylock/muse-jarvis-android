@@ -13,6 +13,7 @@ import dev.timlock.jarvis.core.model.Role
 import dev.timlock.jarvis.core.model.TransportKind
 import dev.timlock.jarvis.core.secure.CredentialNames
 import dev.timlock.jarvis.core.secure.CredentialStore
+import dev.timlock.jarvis.core.secure.CredentialUnreadableException
 import dev.timlock.jarvis.core.secure.PairingImport
 import dev.timlock.jarvis.core.secure.Redactor
 import dev.timlock.jarvis.core.transport.BlePeripheral
@@ -49,6 +50,7 @@ import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Real transport: the upstream musegadget SDK (vendored, unmodified) embedded with Chaquopy (§6.5). The ONLY code
@@ -57,7 +59,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class SdkTransport(
     private val context: Context,
-    internal val store: CredentialStore,
+    rawStore: CredentialStore,
     private val scope: CoroutineScope,
 ) : GadgetTransport {
     override val kind = TransportKind.REAL
@@ -65,6 +67,45 @@ class SdkTransport(
     override val link: StateFlow<LinkState> = _link.asStateFlow()
     private val _events = MutableSharedFlow<TransportEvent>(extraBufferCapacity = 64)
     override val events: SharedFlow<TransportEvent> = _events.asSharedFlow()
+    private val droppedEvents = AtomicLong(0)
+
+    /** tryEmit with a drop counter (Fable 14): logs on the first drop and every 50th; never the event content. */
+    private fun emit(e: TransportEvent): Boolean {
+        val ok = _events.tryEmit(e)
+        if (!ok) {
+            val n = droppedEvents.incrementAndGet()
+            if (n == 1L || n % 50L == 0L) Log.w(TAG, "event buffer full: $n events dropped so far")
+        }
+        return ok
+    }
+
+    @Volatile private var lastUnreadableDiagMs = 0L
+
+    /** A credential file exists but cannot be read (Fable 6): surface a Diagnostic (rate-limited) with the name only. */
+    private fun onCredentialUnreadable(name: String) {
+        Log.w(TAG, "credential '$name' is present but unreadable")
+        val now = SystemClock.elapsedRealtime()
+        if (lastUnreadableDiagMs == 0L || now - lastUnreadableDiagMs > 30_000L) {
+            lastUnreadableDiagMs = now
+            emit(TransportEvent.Diagnostic(Level.ERROR, "credential_unreadable", kind))
+        }
+    }
+
+    /**
+     * The store every consumer (SdkHost, import, link checks) goes through: an unreadable credential throws
+     * [dev.timlock.jarvis.core.secure.CredentialUnreadableException] (never "absent") and raises a Diagnostic.
+     */
+    internal val store: CredentialStore = object : CredentialStore {
+        override fun read(name: String): ByteArray? = try {
+            rawStore.read(name)
+        } catch (e: CredentialUnreadableException) {
+            onCredentialUnreadable(name)
+            throw e
+        }
+        override fun write(name: String, data: ByteArray) = rawStore.write(name, data)
+        override fun delete(name: String) = rawStore.delete(name)
+        override fun exists(name: String): Boolean = rawStore.exists(name)
+    }
     private val _diag = MutableStateFlow(SdkDiagnostics())
     /** Read-only diagnostics for `cmd diag` and the perf HUD (never contains secrets or server text). */
     val diagnostics: StateFlow<SdkDiagnostics> = _diag.asStateFlow()
@@ -106,7 +147,7 @@ class SdkTransport(
             throw c
         } catch (t: Throwable) {
             Log.e(TAG, "start failed: " + Redactor.redact(t.toString()).take(400))
-            _events.tryEmit(TransportEvent.Diagnostic(Level.ERROR, "python_start_failed", kind))
+            emit(TransportEvent.Diagnostic(Level.ERROR, "python_start_failed", kind))
             _link.value = LinkState.Offline("internal")
         }
     }
@@ -134,27 +175,28 @@ class SdkTransport(
     /**
      * M7 BLE setup (§6.6): runs jarvis_bridge.pair_run (a mirror of musegadget.pair.pair) on an IO thread while the
      * service loop keeps polling. Needs [peripheral] and [network]; a second concurrent call is rejected. Cancelling
-     * the caller stops the window and closes the peripheral promptly. A well-formed [token] is stored (and wins over
-     * a previously stored one); on success the Python side kicks the service so it connects immediately.
+     * the caller stops the window and closes the peripheral promptly. A well-formed [token] is passed to Python as an
+     * explicit argument (it wins over the stored one) but is NOT written to the credential store up front: it is
+     * promoted to storage only when the outcome is PAIRED, so a failed attempt can never replace the token of an
+     * existing pairing. [force] = explicit re-pair (pair_run otherwise answers ALREADY_PAIRED). On success the Python
+     * side kicks the service so it connects immediately; after promoting the token we kick once more so the service
+     * picks up the new token.
      */
-    override suspend fun pair(token: SdkToken, ui: PairingUiSink): PairOutcome {
+    override suspend fun pair(token: SdkToken, ui: PairingUiSink, force: Boolean): PairOutcome {
         val b = bridge ?: return PairOutcome.BLE_ERROR
         val p = peripheral ?: return PairOutcome.BLE_ERROR
         val n = network ?: return PairOutcome.BLE_ERROR
         if (!pairingActive.compareAndSet(false, true)) return PairOutcome.BLE_ERROR
         try {
-            if (token.isWellFormed()) {
-                withContext(Dispatchers.IO) {
-                    store.write(CredentialNames.SDK_TOKEN, token.value.trim().toByteArray(Charsets.UTF_8))
-                }
-            }
             val listener = PairListener(b)
             return coroutineScope {
                 val run = async(Dispatchers.IO) {
-                    PairOutcome.valueOf(b.callAttr("pair_run", p, n, ui, token.value, false, listener).toString())
+                    PairOutcome.valueOf(b.callAttr("pair_run", p, n, ui, token.value, force, listener).toString())
                 }
                 try {
-                    run.await()
+                    val outcome = run.await()
+                    if (outcome == PairOutcome.PAIRED && token.isWellFormed()) promoteToken(token)
+                    outcome
                 } catch (c: CancellationException) {
                     withContext(NonCancellable) {
                         runCatching { b.callAttr("pair_cancel") }
@@ -172,6 +214,18 @@ class SdkTransport(
         } finally {
             pairingActive.set(false)
         }
+    }
+
+    /** Writes the token that just paired successfully to the store, then re-kicks the service so it uses it. */
+    private suspend fun promoteToken(token: SdkToken) {
+        withContext(NonCancellable + Dispatchers.IO) {
+            try {
+                store.write(CredentialNames.SDK_TOKEN, token.value.trim().toByteArray(Charsets.UTF_8))
+            } catch (t: Throwable) {
+                Log.w(TAG, "token promote failed: " + Redactor.redact(t.toString()).take(200))
+            }
+        }
+        try { kick() } catch (c: CancellationException) { throw c } catch (t: Throwable) { /* the outcome stands */ }
     }
 
     /**
@@ -243,8 +297,12 @@ class SdkTransport(
         val done = CompletableDeferred<FallbackTurn>()
         fallbacks[req] = done
         try {
-            // The SDK caps a voice note at 2 MiB of WAV. TODO(M6): chunk/trim smarter for 60 s holds.
-            val wav = Wav.encode(if (pcm.size > MAX_FALLBACK_SAMPLES) pcm.copyOf(MAX_FALLBACK_SAMPLES) else pcm)
+            // The SDK caps a voice note at 2 MiB of WAV: drop leading silence first; only if still over the cap cut
+            // the end, and tell the user (system caption) that the end was trimmed.
+            val trimmed = PcmTrim.trimLeadingSilence(pcm)
+            val overCap = trimmed.size > MAX_FALLBACK_SAMPLES
+            if (overCap) emit(TransportEvent.Transcript(Role.SYSTEM, "Recording too long: the end was trimmed", true, kind))
+            val wav = Wav.encode(if (overCap) trimmed.copyOf(MAX_FALLBACK_SAMPLES) else trimmed)
             withContext(Dispatchers.IO) { b.callAttr("dictated", req, wav, sessionId.toString()) }
             return try {
                 withTimeout(70_000) { done.await() }
@@ -279,26 +337,26 @@ class SdkTransport(
     }
 
     internal fun onCommand(invocationId: String, name: String, paramsJson: String) {
-        val ok = _events.tryEmit(TransportEvent.Command(invocationId, name, paramsJson, this.kind))
+        val ok = emit(TransportEvent.Command(invocationId, name, paramsJson, this.kind))
         if (!ok) replyCommand(invocationId, CommandResult.error("display busy"))
     }
 
     internal fun onDiagnostic(level: String, code: String) {
         val lv = runCatching { Level.valueOf(level) }.getOrDefault(Level.ERROR)
-        _events.tryEmit(TransportEvent.Diagnostic(lv, code, kind))
+        emit(TransportEvent.Diagnostic(lv, code, kind))
     }
 
     internal fun onTurn(started: Boolean, id: String) {
-        _events.tryEmit(if (started) TransportEvent.TurnStarted(id, kind) else TransportEvent.TurnSettled(id, kind))
+        emit(if (started) TransportEvent.TurnStarted(id, kind) else TransportEvent.TurnSettled(id, kind))
     }
 
     internal fun onTranscript(role: String, text: String, final: Boolean) {
-        _events.tryEmit(TransportEvent.Transcript(if (role == "user") Role.USER else Role.MUSE, text, final, kind))
+        emit(TransportEvent.Transcript(if (role == "user") Role.USER else Role.MUSE, text, final, kind))
     }
 
     internal fun onAdvisory(count: Int) {
         _diag.update { it.copy(advisoryErrors = count) }
-        _events.tryEmit(TransportEvent.AdvisoryError(count, kind))
+        emit(TransportEvent.AdvisoryError(count, kind))
     }
 
     internal fun onCallPhaseDiag(phase: String, reason: String?) {

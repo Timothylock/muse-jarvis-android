@@ -18,7 +18,8 @@ private const val TAG = "JARVIS_STORE"
  * feeds a streaming 24 kHz mono AudioTrack (USAGE_ASSISTANT / SPEECH, ~240 ms buffer) with non-blocking writes,
  * analyzing each chunk with a [LevelAnalyzer] and storing the level frames keyed by sample position. Each tick
  * the frame under the playback head (AudioTrack.getTimestamp; fallback: write position - estimated latency) is
- * published to `bus.out`, so visuals line up with the sound (Q3). flush() = pause()+flush()+play() and drops the ring.
+ * published to `bus.out`, so visuals line up with the sound (Q3). flush() drops the ring at once and posts the
+ * AudioTrack pause()+flush()+play() to the out thread (the epoch discards anything in flight).
  *
  * Jitter cushion (2026-11-12): the realtime voice feed is paced in 40 ms frames by the SDK's play loop, so any
  * scheduling hiccup on the way (Python loop, JNI) arrives as a feed gap. Playing each frame the moment it lands
@@ -59,6 +60,15 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
     private var decayActive = false
     private var lastOnsets = 0
     private var lastStrength = 0f
+    /** Set by flush(); the out thread performs the AudioTrack pause/flush/play (never on the caller's thread). */
+    private var trackFlushPending = false
+    /** nanoTime of the last flush: AudioTrack timestamps taken before it describe the purged audio. */
+    private var flushNs = 0L
+    /** createTrack() back-off after a failure (no 20 ms retry/log spam). */
+    private var trackRetryAtNs = 0L
+    private var trackFailures = 0
+    /** AudioTrack.getUnderrunCount() at utterance start; the per-utterance delta is logged on drain. */
+    private var underrunsAtStart = -1
 
     private enum class Utter { IDLE, PENDING, PLAYING }
 
@@ -100,10 +110,12 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
             levels.clear()
             utter = Utter.IDLE
             decayActive = true
-            val t = track
-            if (t != null) {
-                try { t.pause(); t.flush(); t.play() } catch (e: Throwable) { Log.w(TAG, "player_flush_failed") }
-            }
+            flushNs = System.nanoTime()
+            // The AudioTrack pause/flush/play is binder work: post it to the out thread instead of doing it on the
+            // caller (the python loop at barge-in / call end). Until it runs, the epoch check discards pending
+            // chunks and headPosition() ignores pre-flush timestamps.
+            trackFlushPending = true
+            underrunsAtStart = -1
             lock.notifyAll()
         }
     }
@@ -116,6 +128,24 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
     }
 
     // ---- audio-out thread ---------------------------------------------------------------------
+
+    /** The track, creating it if needed; after a failure, retries only once the back-off has elapsed. */
+    private fun trackOrCreate(): AudioTrack? {
+        track?.let { return it }
+        val now = System.nanoTime()
+        if (trackFailures > 0 && now < trackRetryAtNs) return null
+        val t = createTrack()
+        if (t == null) {
+            trackFailures++
+            val backoffMs = minOf(TRACK_RETRY_MAX_MS, TRACK_RETRY_BASE_MS shl minOf(trackFailures - 1, 6))
+            trackRetryAtNs = now + backoffMs * 1_000_000L
+        } else {
+            if (trackFailures > 0) Log.i(TAG, "player_track_recovered after=$trackFailures")
+            trackFailures = 0
+        }
+        track = t
+        return t
+    }
 
     private fun createTrack(): AudioTrack? = try {
         val minBytes = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -141,7 +171,7 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
         t.play()
         t
     } catch (e: Throwable) {
-        Log.w(TAG, "player_track_failed ${e.javaClass.simpleName}")
+        if (trackFailures == 0) Log.w(TAG, "player_track_failed ${e.javaClass.simpleName}") // once per failure streak
         null
     }
 
@@ -153,6 +183,15 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
         var chunkEpoch = 0
         try {
             while (true) {
+                // 0) a flush() posted by another thread: purge the track here, on the out thread
+                val doTrackFlush = synchronized(lock) { trackFlushPending.also { trackFlushPending = false } }
+                if (doTrackFlush) {
+                    val t = track
+                    if (t != null) {
+                        try { t.pause(); t.flush(); t.play() } catch (e: Throwable) { Log.w(TAG, "player_flush_failed") }
+                        synchronized(lock) { flushNs = System.nanoTime() } // timestamps before the real flush are stale too
+                    }
+                }
                 // 1) take a chunk if none pending (subject to the jitter cushion)
                 var deferred = false
                 synchronized(lock) {
@@ -164,8 +203,13 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
                         // continuation, not a cold start: re-arm with the small cushion so the gap
                         // between sentences stays a natural pause instead of a refill stall.
                         val cont = System.nanoTime() - lastDrainedNs < CONT_WINDOW_NS
-                        val need = if (utter == Utter.IDLE && !cont) PREBUFFER_SAMPLES else REBUFFER_SAMPLES
-                        if (rCount < need && quietMs < FEED_QUIET_MS) {
+                        val coldStart = utter == Utter.IDLE && !cont
+                        val need = if (coldStart) PREBUFFER_SAMPLES else REBUFFER_SAMPLES
+                        // Continuations (Fable A1 #3): frames land one per 40 ms, so the quiet timeout never
+                        // fires mid-reply; once the track itself has run dry, CONT_MIN_SAMPLES (3 frames) is
+                        // enough to resume — the 240 ms track buffer we refill is itself cushion.
+                        val contReady = !coldStart && rCount >= CONT_MIN_SAMPLES && headPosition() >= accepted
+                        if (rCount < need && quietMs < FEED_QUIET_MS && !contReady) {
                             deferred = true // cushion still building; leave the audio in the ring
                         } else {
                             val n = minOf(CHUNK, rCount)
@@ -175,15 +219,18 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
                             chunkLen = n; chunkOff = 0; chunkEpoch = epoch
                             analyzer.process(chunk, 0, n)
                             levels.append(accepted, n, analyzer)
-                            if (utter == Utter.IDLE) { utter = Utter.PENDING; firstPos = accepted; decayActive = false }
+                            if (utter == Utter.IDLE) {
+                                utter = Utter.PENDING; firstPos = accepted; decayActive = false
+                                underrunsAtStart = underruns(track)
+                            }
                         }
                     }
                 }
                 // 2) hand it to the track (non-blocking)
                 var wrote = 0
                 if (chunkLen > 0) {
-                    val t = track ?: createTrack().also { track = it }
-                    if (t == null) { // no audio device: pretend it played so the state machine completes
+                    val t = trackOrCreate()
+                    if (t == null) { // no audio device (or backing off): pretend it played so the state machine completes
                         synchronized(lock) { if (chunkEpoch == epoch) { accepted += chunkLen; lastAcceptNs = System.nanoTime() } }
                         chunkLen = 0
                     } else {
@@ -226,9 +273,13 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
 
     private var lastPubNs = 0L
 
+    /** AudioTrack underrun count; a not-yet-created track counts as 0 (it is created fresh), -1 if unreadable. */
+    private fun underruns(t: AudioTrack?): Int = if (t == null) 0 else try { t.underrunCount } catch (_: Throwable) { -1 }
+
     private fun publishTick() {
         var fire1 = false
         var fire2 = false
+        var underrunDelta = -1
         var head: Long
         synchronized(lock) {
             head = headPosition()
@@ -240,8 +291,12 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
                 fire2 = true
                 decayActive = true
                 decayEnv = levelEnvAt(head)
+                underrunDelta = if (underrunsAtStart >= 0) underruns(track).let { if (it >= 0) it - underrunsAtStart else -1 } else -1
+                underrunsAtStart = -1
             }
         }
+        // Counter only (Fable A1 #5, deferred): no behaviour depends on it. Logged outside the lock.
+        if (fire2 && underrunDelta >= 0) Log.i(TAG, "player_utterance_underruns $underrunDelta")
         // Throttle publishing to ~100 Hz max.
         val now = System.nanoTime()
         val doPublish = now - lastPubNs >= 8_000_000L
@@ -286,8 +341,12 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
     private fun headPosition(): Long {
         val t = track ?: return accepted
         val ok = try { t.getTimestamp(tsHolder) } catch (_: Throwable) { false }
-        if (ok && tsHolder.framePosition <= accepted) {
-            val dtNs = System.nanoTime() - tsHolder.nanoTime
+        val nowNs = System.nanoTime()
+        // Fable A1 #4: after flush() some HALs keep reporting a stale timestamp (pre-flush nanoTime, old or reset
+        // framePosition) that would extrapolate straight to `accepted` -> false PLAYING/drained. Trust only fresh ones.
+        val fresh = ok && tsHolder.nanoTime >= flushNs && nowNs - tsHolder.nanoTime <= TS_MAX_AGE_NS
+        if (fresh && tsHolder.framePosition <= accepted) {
+            val dtNs = nowNs - tsHolder.nanoTime
             val h = tsHolder.framePosition + (dtNs * RATE / 1_000_000_000L).coerceAtLeast(0L)
             return h.coerceAtMost(accepted)
         }
@@ -311,5 +370,11 @@ class Player(private val bus: AudioVisualBus) : PcmSink {
         private const val FEED_QUIET_MS = 150L
         /** A new utterance starting within this window of the last drain counts as a continuation. */
         private const val CONT_WINDOW_NS = 2_500_000_000L
+        /** A continuation may also start with this much queued once the track buffer has run empty (3 × 40 ms frames). */
+        private const val CONT_MIN_SAMPLES = RATE * 120 / 1000
+        /** AudioTrack timestamps older than this are not trusted (fallback: written - estimated latency). */
+        private const val TS_MAX_AGE_NS = 1_000_000_000L
+        private const val TRACK_RETRY_BASE_MS = 500L
+        private const val TRACK_RETRY_MAX_MS = 30_000L
     }
 }

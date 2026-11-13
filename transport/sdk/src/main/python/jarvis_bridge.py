@@ -4,7 +4,8 @@
 Everything here is OUR code; the SDK is never edited. Behavior is changed only by
   * monkeypatching musegadget.config.load_json/save_json/delete_json (storage -> Kotlin CredentialStore),
   * subclassing musegadget.service.Service (describe / run_command / serve / _sleep),
-  * wrapping VoiceCall._reply_gate in a forwarding proxy (event tap).
+  * wrapping VoiceCall._reply_gate in a forwarding proxy (event tap),
+  * monkeypatching musegadget.voice_call.pcm_rms with the C audioop.rms (same math; see _patch_pcm_rms).
 
 Threading (DESIGN 6.5/6.8): ONE thread "python-loop" runs asyncio. Kotlin -> Python goes through the module-level
 functions below, which only use loop.call_soon_threadsafe / run_coroutine_threadsafe (or tiny thread-safe dict ops).
@@ -12,6 +13,7 @@ Python -> Kotlin callbacks go to the `HOST` object (SdkHost.kt); they are short 
 Never log tokens, server text, transcripts or command params.
 """
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -235,6 +237,35 @@ def _storage_selftest():
     _diag("storageRoundTrip", "true" if ok else "false")
 
 
+def _patch_pcm_rms():
+    """Fable A1 #2: voice_call.pcm_rms unpacks every sample into a tuple and sums squares in a Python generator
+    (~0.5-1 ms per 40 ms frame on the tablet, up to ~100 calls in one burst for a 4 s audio event), stalling the
+    loop that also runs the play pump. audioop.rms is the same math in C. _queue_pcm/_input look pcm_rms up as a
+    module global at call time, so replacing the module attribute takes effect; the SDK file stays byte-identical.
+    Thresholds stay exact: audioop truncates sqrt() to an int, and every caller compares against an integer."""
+    try:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)  # audioop is deprecated (still present) in 3.11
+            import audioop
+        from musegadget import voice_call as _vc
+        orig = _vc.pcm_rms
+
+        def pcm_rms(pcm):
+            n = len(pcm) & ~1
+            if n == 0:
+                return 0
+            return float(audioop.rms(pcm if n == len(pcm) else pcm[:n], 2))
+
+        if pcm_rms(b"\x10\x27" * 4) != 10000.0:  # self-check (int16 10000 -> rms 10000)
+            raise ValueError("audioop mismatch")
+        _vc.pcm_rms = pcm_rms
+        _vc._jarvis_orig_pcm_rms = orig
+        log.info("pcm_rms: audioop patch ok")
+    except Exception as exc:  # keep the SDK's pure-Python version
+        log.warning("pcm_rms patch failed: %s", type(exc).__name__)
+
+
 _FAST_BYTES = True
 
 
@@ -386,6 +417,9 @@ class BridgeService(_service.Service):
             b.link("connecting")
 
 
+OLD_CALL_WAIT_S = 3.0  # _open_call: max wait for a cancelled runner's cleanup before the next call starts
+
+
 class Bridge:
     def __init__(self):
         self.loop = None
@@ -406,6 +440,10 @@ class Bridge:
             return
         self.ready.clear()
         self.stopping = False
+        # Fable finding 10: the module singleton outlives stop()/start(); a new SdkTransport must get its first
+        # link callback even when it equals the previous instance's last one, and must not see stale runners.
+        self._last_link = None
+        self.calls = {}
         self.thread = threading.Thread(target=self._thread_main, name="python-loop", daemon=True)
         self.thread.start()
         self.ready.wait(5)
@@ -423,6 +461,10 @@ class Bridge:
 
     # ---- loop thread ---------------------------------------------------------------------------------------
     def _thread_main(self):
+        try:
+            HOST.onLoopThread()  # THREAD_PRIORITY_AUDIO for this thread: the play pump is the reply audio's clock
+        except Exception as exc:
+            log.warning("loop priority failed: %s", type(exc).__name__)
         try:
             asyncio.run(self._main())
         except BaseException as exc:  # noqa: BLE001 - never let the thread die silently
@@ -549,8 +591,22 @@ class Bridge:
         session = svc._current if svc is not None else None
         if session is None or session.registered_at is None or svc.vm is None:
             raise RuntimeError("offline")
+        old_tasks = []
         for old in list(self.calls.values()):
             old.cancel()
+            if old.task is not None and not old.task.done():
+                old_tasks.append(old.task)
+        if old_tasks:
+            # Fable finding 4: the VM allows one active call. Give the old runner's cleanup (end-call, link close)
+            # a bounded head start so the new /voice/realtime does not race it into a 400 -> admission_failed.
+            # Bounded at 3 s: Kotlin waits 5 s for this coroutine.
+            _done, pending = await asyncio.wait(old_tasks, timeout=OLD_CALL_WAIT_S)
+            if pending:
+                log.info("open_call: %d old runner(s) still cleaning up", len(pending))
+            svc = self.svc
+            session = svc._current if svc is not None else None
+            if session is None or session.registered_at is None or svc.vm is None:
+                raise RuntimeError("offline")
         runner = CallRunner(self, call_id, thread_id or None, svc.vm, svc.noise_host, svc.identity.node_id)
         self.calls[call_id] = runner
         runner.task = asyncio.ensure_future(runner.main())
@@ -615,6 +671,7 @@ def start(host, state_dir, version_name):
         _storage_selftest()
         _tls_setup()
         _bytes_selftest()
+        _patch_pcm_rms()
         threading.Thread(target=_https_probe, name="https-probe", daemon=True).start()
     else:
         for key, value in list(_DIAG_CACHE.items()):
@@ -963,66 +1020,100 @@ class _Source:
 
 
 class _Output:
-    """Buffered speaker sink.
+    """Buffered speaker sink with its own JNI thread.
 
-    The SDK's play pump calls write() once per 40 ms frame and paces itself with a sleep after
-    every frame, so write() must be nearly free: it only appends to a buffer. (Crossing JNI per
-    frame made the pump run ~0.84x on the tablet: the speaker starved into stutter/slow speech,
-    and undelivered audio piled into the SDK's 5 s playback queue until long replies died with
-    ValueError.) A feeder task forwards the buffer to Kotlin in ~240 ms batches on an absolute
-    deadline schedule: a late iteration shortens the next sleep instead of drifting, so the
-    long-run delivery rate stays 1.0x."""
+    The SDK's play pump calls write() once per 40 ms frame on the loop and paces itself with a
+    sleep after every frame; it is the only clock of the reply audio. So write() must be nearly
+    free and nothing on the loop may cross JNI per frame (crossing per frame made the pump run
+    ~0.84x on the tablet; the later loop-side feeder still raced the pump's timer, Fable A1 #1a).
+    write() therefore only appends to a deque and sets an Event; a dedicated `python-audio-out`
+    thread hands the audio to Kotlin (HOST.pcmOut -> Player.write, which never blocks). There is
+    no Python-side pacing at all: the pump meters, the Player's 5 s ring buffers. Chaquopy releases
+    the GIL around Java calls, so the loop never waits on this thread.
 
-    FEED_BYTES = 24000 * 2 * 240 // 1000  # 240 ms of 24 kHz PCM16 per JNI crossing
-    RATE_BPS = 24000 * 2
+    flush() goes through the same queue as a marker, so a chunk already popped by the thread can
+    never reach the Player after the flush (order is preserved end to end)."""
+
+    FEED_BYTES = 24000 * 2 * 240 // 1000  # max bytes per JNI crossing when frames have queued up
+    _FLUSH = object()
 
     def __init__(self, call_id):
         self.call_id = call_id
-        self.buf = bytearray()
-        self.gen = 0  # bumped by flush(); a feeder from an older generation exits
-        self.feeder = None
-        self.deadline = None
+        self.q = collections.deque()
+        self.lock = threading.Lock()
+        self.wake = threading.Event()
+        self.busy = False      # the out thread holds a popped item it has not delivered yet
+        self.closed = False
         self.last_write = 0.0
+        self.thread = threading.Thread(target=self._run, name="python-audio-out", daemon=True)
+        self.thread.start()
 
     @property
     def active(self):
-        return bool(self.buf) or (time.monotonic() - self.last_write) < 0.35
+        return bool(self.q) or self.busy or (time.monotonic() - self.last_write) < 0.35
 
-    def write(self, pcm):
-        self.buf += pcm
+    def write(self, pcm):  # loop thread
         self.last_write = time.monotonic()
-        if self.feeder is None or self.feeder.done():
-            self.feeder = asyncio.ensure_future(self._feed(self.gen))
+        with self.lock:
+            self.q.append(bytes(pcm))
+        self.wake.set()
 
-    async def _feed(self, gen):
-        while gen == self.gen:
-            if not self.buf:
-                self.deadline = None
+    def flush(self):  # loop thread (barge-in / reply gate)
+        with self.lock:
+            self.q.clear()
+            self.q.append(self._FLUSH)
+        self.wake.set()
+
+    def _next(self):
+        """Pops the next marker, or coalesces queued PCM (only what is already there) up to FEED_BYTES."""
+        with self.lock:
+            if not self.q:
+                self.busy = False
+                return None
+            self.busy = True
+            item = self.q.popleft()
+            if item is self._FLUSH:
+                return item
+            parts, n = [item], len(item)
+            while self.q and self.q[0] is not self._FLUSH and n + len(self.q[0]) <= self.FEED_BYTES:
+                nxt = self.q.popleft()
+                parts.append(nxt)
+                n += len(nxt)
+            return parts[0] if len(parts) == 1 else b"".join(parts)
+
+    def _run(self):  # python-audio-out thread
+        try:
+            HOST.onAudioOutThread()
+        except Exception:
+            pass
+        while True:
+            self.wake.wait()
+            self.wake.clear()
+            while True:
+                item = self._next()
+                if item is None:
+                    break
+                try:
+                    if item is self._FLUSH:
+                        HOST.pcmFlush(self.call_id)
+                    else:
+                        HOST.pcmOut(self.call_id, _jbytes(item))
+                except Exception as exc:  # never let the out thread die mid-call
+                    log.warning("audio out failed: %s", type(exc).__name__)
+            if self.closed and not self.q:
+                with self.lock:
+                    self.busy = False
                 return
-            n = min(len(self.buf), self.FEED_BYTES)
-            chunk = bytes(self.buf[:n])
-            del self.buf[:n]
-            HOST.pcmOut(self.call_id, _jbytes(chunk))
-            now = time.monotonic()
-            if self.deadline is None or self.deadline < now - 0.5:
-                self.deadline = now
-            self.deadline += len(chunk) / self.RATE_BPS
-            delay = self.deadline - time.monotonic()
-            if delay > 0:
-                await asyncio.sleep(delay)
-
-    def flush(self):
-        self.gen += 1
-        self.buf.clear()
-        self.deadline = None
-        HOST.pcmFlush(self.call_id)
 
     async def aclose(self):
-        if self.feeder is not None and not self.feeder.done():
-            try:
-                await asyncio.wait_for(asyncio.shield(self.feeder), 3)
-            except BaseException:  # noqa: BLE001
-                self.feeder.cancel()
+        """Teardown: let the out thread deliver what is queued (<= 3 s), then stop it."""
+        deadline = time.monotonic() + 3
+        while (self.q or self.busy) and self.thread.is_alive() and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        with self.lock:
+            self.q.clear()
+            self.closed = True
+        self.wake.set()
 
 
 _TRANSCRIPTS = {
@@ -1070,11 +1161,6 @@ class CallRunner:
         self.stop_evt = asyncio.Event()
         self._user_done = ""     # completed items of the user's current turn, joined
         self._user_partial = ""  # deltas of the user's in-flight item
-        self._last_user_t = 0.0  # monotonic time of the last user transcript event
-        self._muse_open = False  # a Muse transcript item is in flight (for the muse_starts counter)
-        # Privacy-safe per-call counters (no text), logged once at call end (Fable A2 #4).
-        self.stats = {"user_deltas": 0, "user_completeds": 0, "turn_started": 0, "turn_settled": 0,
-                      "speech_started": 0, "muse_starts": 0, "max_user_len": 0}
 
     # ---- Kotlin-facing (any thread) ----
     def push(self, data):
@@ -1113,73 +1199,44 @@ class CallRunner:
         if self.task is not None:
             await asyncio.wait({self.task}, timeout=13)
 
-    # A user transcript event this long after the previous one starts a new hold (fresh caption).
-    USER_GAP_RESET_S = 3.0
-
     def _tap(self, event):
         kind = event.get("type")
-        st = self.stats
         if kind == "hatch.voice.turn_started":
-            # NOT a caption reset: the server endpoints with its own VAD during one continuous hold
-            # and submits each STT item as a turn, so turn_started fires per item. Resetting here
-            # wiped all but the latest fragment (Fable audit A2 #1). Resets happen on a role
-            # switch (first Muse transcript after user text) or a > USER_GAP_RESET_S gap instead.
-            st["turn_started"] += 1
+            self._user_done = ""
+            self._user_partial = ""
             mid = event.get("submission_message_id")
             if isinstance(mid, str) and mid:
                 HOST.onTurn(self.call_id, True, mid)
         elif kind == "hatch.voice.turn_settled":
-            st["turn_settled"] += 1
             mid = event.get("response_message_id")
             if isinstance(mid, str) and mid:
                 HOST.onTurn(self.call_id, False, mid)
-        elif kind == "input_audio_buffer.speech_started":
-            st["speech_started"] += 1  # counted only: fires per VAD segment, never a caption reset
         else:
             t = _TRANSCRIPTS.get(kind)
             if t is not None:
                 text = event.get(t[2])
                 if isinstance(text, str) and text:
                     if t[0] == "user":
-                        self._user_event(text, t[1])
+                        # The service emits the user's speech as per-item fragments (deltas, then a
+                        # completed item). Forwarded raw, the caption bar only ever shows the latest
+                        # few words (Timothy, 2026-11-12). Accumulate across the whole turn instead:
+                        # deltas extend the in-flight item; a completed item folds into the turn text.
+                        if t[1]:
+                            self._user_done = (self._user_done + " " + text.strip()).strip()
+                            self._user_partial = ""
+                            HOST.onTranscript(self.call_id, "user", self._user_done, True)
+                        else:
+                            # Append fragments; if a sender ever switches to cumulative partials
+                            # (each one extending the last), adopt the longer text instead.
+                            if self._user_partial and text.startswith(self._user_partial):
+                                self._user_partial = text
+                            else:
+                                self._user_partial += text
+                            whole = (self._user_done + " " + self._user_partial).strip() \
+                                if self._user_done else self._user_partial
+                            HOST.onTranscript(self.call_id, "user", whole, False)
                     else:
-                        if not self._muse_open:
-                            st["muse_starts"] += 1
-                        self._muse_open = not t[1]
-                        # Role switch: the user's turn text is complete; the next user event starts fresh.
-                        self._user_done = ""
-                        self._user_partial = ""
                         HOST.onTranscript(self.call_id, t[0], text, t[1])  # text goes to Kotlin only, never logged
-
-    def _user_event(self, text, final):
-        # The service emits the user's speech as per-item fragments (deltas, then a completed item),
-        # possibly several items per hold. Accumulate across the whole hold: deltas extend the
-        # in-flight item; a completed item folds into the turn text. The bridge is the ONLY
-        # accumulation layer (Kotlin shows what it gets).
-        st = self.stats
-        now = time.monotonic()
-        if self._last_user_t and now - self._last_user_t > self.USER_GAP_RESET_S:
-            self._user_done = ""
-            self._user_partial = ""
-        self._last_user_t = now
-        if final:
-            st["user_completeds"] += 1
-            self._user_done = (self._user_done + " " + text.strip()).strip()
-            self._user_partial = ""
-            whole = self._user_done
-        else:
-            st["user_deltas"] += 1
-            # Append fragments; if a sender ever switches to cumulative partials
-            # (each one extending the last), adopt the longer text instead.
-            if self._user_partial and text.startswith(self._user_partial):
-                self._user_partial = text
-            else:
-                self._user_partial += text
-            whole = (self._user_done + " " + self._user_partial).strip() \
-                if self._user_done else self._user_partial
-        if len(whole) > st["max_user_len"]:
-            st["max_user_len"] = len(whole)
-        HOST.onTranscript(self.call_id, "user", whole, final)
 
     async def _watch(self, call):
         announced = False
@@ -1233,7 +1290,7 @@ class CallRunner:
             if watcher is not None:
                 watcher.cancel()
             try:
-                await self.output.aclose()  # let the feeder deliver the tail before teardown
+                await self.output.aclose()  # let the out thread deliver the tail (<= 3 s), then stop it
             except BaseException:  # noqa: BLE001
                 pass
             stop.set()
@@ -1244,8 +1301,6 @@ class CallRunner:
                     conn.cancel()
                     await asyncio.gather(conn, return_exceptions=True)
             self.bridge.calls.pop(self.call_id, None)
-        # Counts only (no transcript text): settles "deltas vs completed-only" and per-item turns.
-        log.info("call stats: %s", " ".join("%s=%d" % kv for kv in sorted(self.stats.items())))
         try:
             HOST.onCallPhase(self.call_id, "ended", reason)
         except Exception:

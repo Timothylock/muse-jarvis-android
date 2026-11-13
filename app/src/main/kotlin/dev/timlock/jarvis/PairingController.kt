@@ -5,6 +5,7 @@ import android.util.Log
 import dev.timlock.jarvis.core.model.TransportKind
 import dev.timlock.jarvis.core.secure.CredentialNames
 import dev.timlock.jarvis.core.secure.CredentialStore
+import dev.timlock.jarvis.core.secure.CredentialUnreadableException
 import dev.timlock.jarvis.core.secure.InMemoryCredentialStore
 import dev.timlock.jarvis.core.secure.PairingImport
 import dev.timlock.jarvis.core.transport.GadgetTransport
@@ -25,7 +26,7 @@ import java.security.SecureRandom
  * Import / export / token provisioning (§4.2.6, §4.2 P1), adapted for scoped storage: the drop dir is
  * `getExternalFilesDir("import")` (adb-pushable, e.g. /sdcard/Android/data/dev.timlock.jarvis/files/import/),
  * the export goes to `getExternalFilesDir("export")/jarvis-identity.json`. Never logs credential values.
- * TODO(M7): the pairing screens call the same functions (P1 paste, import button).
+ * The pairing screens call the same functions (P1 paste, import button).
  */
 class PairingController(
     context: Context,
@@ -58,7 +59,11 @@ class PairingController(
      */
     suspend fun import(overwriteIdentity: Boolean): Status = mutex.withLock {
         _status.value = Status.Running
-        val result = withContext(Dispatchers.IO) { runImport(overwriteIdentity) }
+        val result = try {
+            withContext(Dispatchers.IO) { runImport(overwriteIdentity) }
+        } catch (e: CredentialUnreadableException) {
+            Status.Failed("stored credentials unreadable")
+        }
         _status.value = result
         when (result) {
             is Status.Conflict -> Log.w("JARVIS_UI", "import: different identity already stored (${result.storedNodeId} vs ${result.importedNodeId}); confirm to replace")
@@ -141,10 +146,18 @@ class PairingController(
         PairingImport.nodeIdForMac(mac) to f.path
     }
 
-    /** Stores a well-formed SDK token; returns null on success or a reason (never the token). */
+    /**
+     * Stores a well-formed SDK token; returns null on success or a reason (never the token). Refused while a pairing
+     * exists: replacing the token under a live pairing can orphan it, so `unpair` must run first.
+     */
     suspend fun provisionToken(raw: String?): String? {
         val t = SdkToken(raw.orEmpty())
         if (!t.isWellFormed()) return "malformed token"
+        val paired = withContext(Dispatchers.IO) { credentials.exists(CredentialNames.PAIRING) }
+        if (paired) {
+            Log.w("JARVIS_UI", "token provisioning refused: a pairing exists (unpair first)")
+            return PAIRED_REFUSAL
+        }
         withContext(Dispatchers.IO) { credentials.write(CredentialNames.SDK_TOKEN, raw!!.trim().toByteArray(Charsets.UTF_8)) }
         Log.i("JARVIS_UI", "token provisioned ${t.hint()}")
         return null
@@ -165,5 +178,6 @@ class PairingController(
     companion object {
         const val IMPORT_DIR = "import"
         const val EXPORT_DIR = "export"
+        const val PAIRED_REFUSAL = "already paired: unpair first"
     }
 }

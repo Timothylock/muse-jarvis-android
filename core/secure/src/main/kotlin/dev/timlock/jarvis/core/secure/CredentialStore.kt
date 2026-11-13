@@ -6,6 +6,7 @@ package dev.timlock.jarvis.core.secure
  * Implementations must be thread-safe: the SDK bridge calls them from Python worker threads.
  */
 interface CredentialStore {
+    /** Null ONLY when the credential is absent; throws [CredentialUnreadableException] when present but unreadable. */
     fun read(name: String): ByteArray?
     /** Atomic: a crash leaves the old value or the new one, never a partial one. */
     fun write(name: String, data: ByteArray)
@@ -28,3 +29,11 @@ class InMemoryCredentialStore : CredentialStore {
     override fun write(name: String, data: ByteArray) { map[name] = data.copyOf() }
     override fun delete(name: String) { map.remove(name) }
 }
+
+/**
+ * A credential file exists but could not be read or decrypted (e.g. a Keystore hiccup or a lost key). Distinct from
+ * "absent" (null): callers must never treat this as "no credentials" and silently regenerate an identity or token.
+ * The message carries only the credential name and the cause's class, never any value.
+ */
+class CredentialUnreadableException(val name: String, cause: Throwable? = null) :
+    RuntimeException("credential '$name' exists but is unreadable" + (cause?.let { ": ${it.javaClass.simpleName}" } ?: ""))

@@ -54,9 +54,24 @@ class FileCredentialStoreTest {
         assertFalse(a.copyOfRange(1, 13).contentEquals(b.copyOfRange(1, 13)))
     }
 
-    @Test fun wrongKeyOrTamperedFileReturnsNullAndLogsOnlyNameAndClass() {
+    private fun assertUnreadable(s: FileCredentialStore, name: String) {
+        try {
+            s.read(name)
+            fail("expected CredentialUnreadableException")
+        } catch (e: CredentialUnreadableException) {
+            assertEquals(name, e.name)
+        }
+    }
+
+    @Test fun absentFileReadsNull() {
+        val s = store()
+        assertNull(s.read("pairing.json"))
+        assertFalse(s.exists("pairing.json"))
+    }
+
+    @Test fun wrongKeyOrTamperedFileThrowsAndLogsOnlyNameAndClass() {
         store().write("pairing.json", "secret-payload".toByteArray())
-        assertNull(store { newKey() }.let { s -> s.read("pairing.json") })
+        assertUnreadable(store { newKey() }, "pairing.json")
         assertTrue(logs.isNotEmpty())
         logs.forEach {
             assertTrue(it.contains("pairing.json"))
@@ -66,19 +81,20 @@ class FileCredentialStoreTest {
         val raw = f.readBytes()
         raw[raw.size - 1] = (raw[raw.size - 1].toInt() xor 1).toByte()
         f.writeBytes(raw)
-        assertNull(store().read("pairing.json"))
+        assertUnreadable(store(), "pairing.json")
+        assertTrue(store().exists("pairing.json")) // present-but-corrupt still counts as stored
         f.writeBytes(byteArrayOf(1, 2, 3))
-        assertNull(store().read("pairing.json"))
+        assertUnreadable(store(), "pairing.json")
         raw[0] = 9
         f.writeBytes(raw)
-        assertNull(store().read("pairing.json"))
+        assertUnreadable(store(), "pairing.json")
     }
 
     @Test fun fileCannotBeSwappedToAnotherName() {
         val s = store()
         s.write("identity.json", "one".toByteArray())
         File(tmp.root, "secure/identity.json.enc").copyTo(File(tmp.root, "secure/pairing.json.enc"))
-        assertNull(s.read("pairing.json"))
+        assertUnreadable(s, "pairing.json")
     }
 
     @Test fun failedWriteKeepsOldValueAndLeavesNoTmp() {

@@ -5,6 +5,7 @@ import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.TransportKind
 import dev.timlock.jarvis.core.secure.CredentialNames
 import dev.timlock.jarvis.core.secure.CredentialStore
+import dev.timlock.jarvis.core.secure.CredentialUnreadableException
 import dev.timlock.jarvis.core.store.AppStore
 import dev.timlock.jarvis.core.store.Intent as StoreIntent
 import dev.timlock.jarvis.core.transport.PairOutcome
@@ -24,12 +25,21 @@ class AppPairingDeps(
     private val context: Context,
     private val credentials: CredentialStore,
     private val store: AppStore,
+    /** Explicit re-pair: pass force=true to the transport so an existing pairing does not short-circuit to ALREADY_PAIRED. */
+    private val force: Boolean,
     private val transport: () -> dev.timlock.jarvis.core.transport.GadgetTransport?,
 ) : PairingDeps {
 
     override fun storedToken(): SdkToken? {
         if (sim) return null
-        return credentials.read(CredentialNames.SDK_TOKEN)?.let { SdkToken(String(it, Charsets.UTF_8).trim()) }?.takeIf { it.isWellFormed() }
+        // An unreadable stored token is treated as "none" here (the user can paste a new one); the unreadable file
+        // itself is left untouched.
+        val raw = try {
+            credentials.read(CredentialNames.SDK_TOKEN)
+        } catch (e: CredentialUnreadableException) {
+            null
+        }
+        return raw?.let { SdkToken(String(it, Charsets.UTF_8).trim()) }?.takeIf { it.isWellFormed() }
     }
 
     override fun saveToken(token: SdkToken) {
@@ -47,7 +57,7 @@ class AppPairingDeps(
         val t = transport() ?: return PairOutcome.BLE_ERROR
         if ((t.kind == TransportKind.SIM) != sim) return PairOutcome.BLE_ERROR
         if (sim) AppGraph.simController.applyPairSettings()
-        return t.pair(token, ui)
+        return t.pair(token, ui, force)
     }
 
     override fun nodeId(): String? {

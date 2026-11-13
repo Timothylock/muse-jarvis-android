@@ -18,7 +18,11 @@ interface GadgetTransport {
     suspend fun stop()
 
     // pairing
-    suspend fun pair(token: SdkToken, ui: PairingUiSink): PairOutcome
+    /**
+     * [force] = explicit re-pair: run the setup window even when a pairing already exists (otherwise ALREADY_PAIRED).
+     * The new [token] is NOT stored up front; it is promoted to storage only when the outcome is PAIRED.
+     */
+    suspend fun pair(token: SdkToken, ui: PairingUiSink, force: Boolean = false): PairOutcome
     suspend fun importPairing(bundle: PairingBundle): ImportResult
     suspend fun unpair()
 

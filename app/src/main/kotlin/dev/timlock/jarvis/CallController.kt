@@ -83,7 +83,14 @@ class CallController(
             Effect.HangUpCall -> {
                 val h = handle
                 openJob?.cancel()
-                try { h?.hangUp() } catch (t: Throwable) { Log.w("JARVIS_SIM", "hangUp failed: ${t.javaClass.simpleName}") }
+                // Not awaited: the transport bounds hangUp at ~5 s and awaiting it here would block every later
+                // effect (OpenCall, MicStart) in this one-coroutine pipeline. The bridge itself waits out the old
+                // call's runner when the next call opens.
+                if (h != null) scope.launch {
+                    try { h.hangUp() } catch (c: CancellationException) { throw c } catch (t: Throwable) {
+                        Log.w("JARVIS_SIM", "hangUp failed: ${t.javaClass.simpleName}")
+                    }
+                }
                 finishTrack("hangup")
                 dropCall()
                 player.flush()

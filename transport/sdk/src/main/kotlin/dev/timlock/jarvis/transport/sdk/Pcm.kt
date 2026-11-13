@@ -40,3 +40,35 @@ object Wav {
         return out
     }
 }
+
+/** Pure trimming helpers for the dictated-turn fallback (the SDK caps a voice note at 2 MiB of WAV). */
+object PcmTrim {
+    /**
+     * Drops leading silence from 24 kHz mono PCM16: scans [windowMs] windows for the first one whose RMS reaches
+     * [rmsThreshold] and keeps [leadInMs] before it. Returns [pcm] itself when nothing would be removed or no
+     * voiced window exists (so an all-quiet clip is never emptied).
+     */
+    fun trimLeadingSilence(
+        pcm: ShortArray,
+        sampleRate: Int = 24_000,
+        windowMs: Int = 20,
+        leadInMs: Int = 200,
+        rmsThreshold: Int = 300,
+    ): ShortArray {
+        val win = (sampleRate * windowMs / 1000).coerceAtLeast(1)
+        var first = -1
+        var start = 0
+        while (start + win <= pcm.size) {
+            var sum = 0.0
+            for (i in start until start + win) {
+                val v = pcm[i].toDouble()
+                sum += v * v
+            }
+            if (Math.sqrt(sum / win) >= rmsThreshold) { first = start; break }
+            start += win
+        }
+        if (first < 0) return pcm
+        val from = (first - sampleRate * leadInMs / 1000).coerceAtLeast(0)
+        return if (from == 0) pcm else pcm.copyOfRange(from, pcm.size)
+    }
+}

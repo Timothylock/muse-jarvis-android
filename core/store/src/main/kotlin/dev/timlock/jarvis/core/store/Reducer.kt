@@ -37,6 +37,12 @@ const val PTT_CAP_MS = 60_000L
 const val PTT_WARN_MS = 55_000L
 const val TAP_MS = 250L
 const val SETTLE_MS = 200L
+/**
+ * Settle after a drain while the server turn is still in flight (Fable A1 #3): a dry spell between sentences is a
+ * pause, not the end of the reply. Matches the Player's continuation window; TurnSettled ends it early, and the
+ * deadline itself is the fallback so a missing turn_settled cannot strand SPEAKING.
+ */
+const val SETTLE_IN_FLIGHT_MS = 2_500L
 const val LAYOUT_RETURN_MS = 1_200L
 const val MIC_TAIL_MS = 2_000L
 const val DISPLAY_RATE_WINDOW_MS = 5_000L
@@ -139,16 +145,12 @@ private class Ctx(var s: AppState, val now: Long) {
         caption?.let { setCaption(it, null, true) }
     }
 
-    /**
-     * Sets [AppState.caption] (and keeps emitting [Effect.ShowCaption]). Text that extends the previous caption of the
-     * same role continues typing (C10) — also after a final: the bridge folds a completed STT item into the hold's
-     * text and the next delta extends it, which must not retype from character 0 (Fable audit A2 #2).
-     */
+    /** Sets [AppState.caption] (and keeps emitting [Effect.ShowCaption]). Partials that extend the previous partial continue typing (C10). */
     fun setCaption(text: String, role: Role?, final: Boolean) {
         val prev = s.caption
         val r = if (role == Role.SYSTEM) null else role
         var at = now
-        if (prev != null && prev.role == r && text.startsWith(prev.text)) {
+        if (prev != null && prev.role == r && !prev.final && text.startsWith(prev.text)) {
             val typed = minOf(prev.text.length.toLong(), (now - prev.atMs).coerceAtLeast(0) * CAPTION_CPS / 1000)
             at = now - typed * 1000 / CAPTION_CPS
         }
@@ -307,7 +309,7 @@ private class Ctx(var s: AppState, val now: Long) {
             Intent.ResetFallback -> s = s.copy(admitFailures = emptyList(), fallbackUntil = null)
             Intent.SinkDrained -> {
                 s = s.copy(sinkPlaying = false)
-                if (m == SPEAKING) s = s.copy(settleDeadline = now + SETTLE_MS)
+                if (m == SPEAKING) s = s.copy(settleDeadline = now + if (s.turnInFlight) SETTLE_IN_FLIGHT_MS else SETTLE_MS)
             }
             // The flow may open from the rest states (UNPAIRED, re-pair from OFFLINE, sim/idle with no call).
             Intent.PairingOpen -> if (m == UNPAIRED || m == OFFLINE || (m == IDLE && !callOpen)) go(PAIRING)
@@ -538,7 +540,9 @@ private class Ctx(var s: AppState, val now: Long) {
             }
             is TransportEvent.TurnSettled -> {
                 s = s.copy(turnInFlight = false)
-                if (m == THINKING && !s.sinkPlaying) enterStandby() // text-only / empty turn
+                // THINKING: text-only / empty turn. SPEAKING: the reply audio already drained and we were holding
+                // SPEAKING through a possible sentence pause (SETTLE_IN_FLIGHT_MS) — the turn is over, stand by now.
+                if ((m == THINKING || m == SPEAKING) && !s.sinkPlaying) enterStandby()
             }
             is TransportEvent.Transcript -> setCaption(e.text, e.role, e.final)
             is TransportEvent.AdvisoryError -> s = s.copy(advisoryErrors = e.count)
@@ -560,14 +564,7 @@ private class Ctx(var s: AppState, val now: Long) {
                 revealStartMs = now - PanelManager.BRACKET_STAGE_MS,
             )
         }.take(s.config.maxPanels)
-        val withLifetimes = PanelManager.applyLifetimes(PanelStack(keep), callOpen, now, panelTtl)
-        // A timer that ended while the process was dead was marked chimed above; give it a fresh
-        // ring window from the restore so it is seen as rung instead of expiring in the same step.
-        val adjusted = withLifetimes.copy(panels = withLifetimes.panels.map {
-            val c = it.content
-            if (c is PanelContent.Timer && c.chimed && c.endsAtMs <= now) it.copy(expiresAtMs = now + PanelManager.TIMER_RING_MS) else it
-        })
-        val restored = PanelManager.layout(adjusted)
+        val restored = PanelManager.layout(PanelManager.applyLifetimes(PanelStack(keep), callOpen, now, panelTtl))
         s = s.copy(panels = PanelManager.expire(restored, now).first)
     }
 

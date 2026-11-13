@@ -27,6 +27,8 @@ data class UserConfig(
 ) {
     fun sanitized(): UserConfig = copy(
         standbyMs = standbyMs.coerceIn(15_000L, 120_000L),
+        // Deliberately narrower than the spec's 20-180 s range (Fable audit finding 13, deferred by the overseer
+        // 2026-11-13): widen only if the owner asks.
         thinkTimeoutMs = thinkTimeoutMs.coerceIn(30_000L, 90_000L),
         panelTtlMs = panelTtlMs?.coerceIn(10_000L, 3_600_000L),
         maxPanels = maxPanels.coerceIn(2, 3),

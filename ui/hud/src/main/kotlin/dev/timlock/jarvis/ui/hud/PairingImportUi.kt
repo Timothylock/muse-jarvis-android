@@ -33,7 +33,7 @@ data class ImportScreenState(
     val success: Boolean = false,
 )
 
-/** Minimal import-from-another-device screen (§4.2.6). TODO(M7): replaced by the full pairing flow. */
+/** Minimal import-from-another-device screen (§4.2.6), reached from the pairing flow's "Import pairing instead". */
 @Composable
 fun ImportPairingScreen(
     state: ImportScreenState,

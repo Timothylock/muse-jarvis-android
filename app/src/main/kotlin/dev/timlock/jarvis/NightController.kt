@@ -61,6 +61,8 @@ class NightController(
 
     private fun desired(): Boolean {
         val s = store.state.value
+        // No mode chosen yet = first-run screen: never dim it (even when forced ON).
+        if (s.mode == null) return false
         return when (force) {
             Force.ON -> true
             Force.OFF -> false

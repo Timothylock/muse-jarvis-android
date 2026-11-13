@@ -240,6 +240,47 @@ class ReducerTest {
         assertEquals(SPEAKING, h.orb)
     }
 
+    // ---- sentence-boundary settle (Fable A1 #3 / finding 8) ----------------------------------
+
+    /** SPEAKING with the server turn still in flight (TurnStarted seen, no TurnSettled yet). */
+    private fun speakingInFlight() = H.thinking().after(200, H.turnStarted()).after(300, Intent.SinkFirstAudible)
+
+    @Test fun drainWhileTurnInFlightHoldsSpeakingThroughSentencePause() {
+        val h = speakingInFlight().after(1000, Intent.SinkDrained)
+        assertTrue(h.s.turnInFlight)
+        assertEquals(h.t + SETTLE_IN_FLIGHT_MS, h.s.settleDeadline)
+        h.after(SETTLE_MS)
+        assertEquals(SPEAKING, h.orb) // the 200 ms settle no longer applies mid-turn
+        h.after(1000, Intent.SinkFirstAudible) // next sentence
+        assertEquals(SPEAKING, h.orb)
+        assertNull(h.s.settleDeadline)
+    }
+
+    @Test fun inFlightSettleFallsBackToStandbyWithoutTurnSettled() {
+        val h = speakingInFlight().after(1000, Intent.SinkDrained)
+        h.after(SETTLE_IN_FLIGHT_MS - 1)
+        assertEquals(SPEAKING, h.orb)
+        h.after(1)
+        assertEquals(STANDBY, h.orb)
+    }
+
+    @Test fun turnSettledAfterDrainGoesStandbyAtOnce() {
+        val h = speakingInFlight().after(1000, Intent.SinkDrained).after(300, H.turnSettled())
+        assertEquals(STANDBY, h.orb)
+        assertFalse(h.s.turnInFlight)
+        assertNull(h.s.settleDeadline)
+        assertEquals(h.t, h.s.countdownStartMs)
+    }
+
+    @Test fun turnSettledWhileStillPlayingKeepsSpeakingThenShortSettle() {
+        val h = speakingInFlight().after(500, H.turnSettled())
+        assertEquals(SPEAKING, h.orb) // audio still audible
+        h.after(800, Intent.SinkDrained)
+        assertEquals(h.t + SETTLE_MS, h.s.settleDeadline) // turn over: back to the short settle
+        h.after(SETTLE_MS)
+        assertEquals(STANDBY, h.orb)
+    }
+
     @Test fun pttDownInStandbyListensWithoutNewCall() {
         val h = H.standby().after(5000, Intent.PttDown)
         assertEquals(LISTENING, h.orb)

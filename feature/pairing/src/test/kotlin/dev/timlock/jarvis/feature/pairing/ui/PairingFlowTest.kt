@@ -80,15 +80,25 @@ class PairingFlowTest {
         assertEquals(1, d.pairCalls)
     }
 
-    @Test fun enteredTokenIsSavedOnNext() = runTest {
+    @Test fun enteredTokenIsStagedOnNextAndSavedOnlyWhenPaired() = runTest {
         val d = FakeDeps()
         val f = flow(d)
         f.onTokenChanged("junk"); f.next(); runCurrent()
         assertEquals(PairStep.TOKEN, f.state.value.step)
         assertNull(d.stored)
         f.onTokenChanged(" $GOOD "); f.next(); runCurrent()
-        assertEquals(GOOD, d.stored?.value)
+        assertNull(d.stored) // staged in memory only
         assertEquals(PairStep.WINDOW, f.state.value.step) // readiness green -> straight through
+        d.gate.complete(PairOutcome.PAIRED); runCurrent()
+        assertEquals(GOOD, d.stored?.value)
+    }
+
+    @Test fun failedPairingNeverSavesTheStagedToken() = runTest {
+        val d = FakeDeps()
+        val f = flow(d)
+        f.onTokenChanged(GOOD); f.next(); runCurrent()
+        d.gate.complete(PairOutcome.WINDOW_CLOSED); runCurrent()
+        assertNull(d.stored)
     }
 
     @Test fun windowProgressAndCountdownFollowSink() = runTest {
@@ -217,7 +227,7 @@ class PairingFlowTest {
         val d = FakeDeps()
         val f = flow(d)
         assertNull(f.provisionToken(GOOD))
-        assertEquals(GOOD, d.stored?.value)
+        assertNull(d.stored) // staged, not stored
         assertEquals(GOOD, f.state.value.entered)
         assertEquals("malformed token", f.provisionToken("nope"))
         d.readiness = Readiness.fromProblem("bluetooth_off")

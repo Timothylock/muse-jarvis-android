@@ -53,7 +53,7 @@ internal fun SettingsHost(
         onConfig = { new -> AppGraph.updateConfigAsync { new } },
         onClose = close,
         onMode = { m -> close(); vm.choose(m) },
-        onRepair = { close(); AppGraph.openPairing(repair = state.mode == Mode.REAL && state.link is LinkState.PairingLost) },
+        onRepair = { close(); AppGraph.openPairing(repair = state.mode == Mode.REAL) },
         onImport = { close(); onOpenImport() },
         onUnpair = { AppGraph.appScope.launch(Dispatchers.Default) { AppGraph.transport?.unpair() } },
         onPerfHud = { vm.store.dispatch(StoreIntent.SetPerfHud(it)) },

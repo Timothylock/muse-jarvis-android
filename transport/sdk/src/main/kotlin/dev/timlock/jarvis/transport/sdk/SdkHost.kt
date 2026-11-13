@@ -1,5 +1,6 @@
 package dev.timlock.jarvis.transport.sdk
 
+import android.os.Process
 import android.util.Log
 import dev.timlock.jarvis.core.secure.Redactor
 
@@ -32,6 +33,22 @@ class SdkHost internal constructor(private val t: SdkTransport) {
     fun pcmOut(callId: String, pcm: ByteArray) { t.call(callId)?.onPcm(pcm) }
     fun pcmFlush(callId: String) { t.call(callId)?.onFlush() }
     fun onFallback(reqId: String, reply: String?, error: String?) = t.onFallback(reqId, reply, error)
+
+    /**
+     * Called once at the top of the python-loop thread (Fable A1 #1b): the SDK play pump on that loop is the only
+     * realtime clock of the reply audio, so it must not be outranked by GL/Compose. THREAD_PRIORITY_AUDIO (-16),
+     * deliberately NOT URGENT_AUDIO: the loop also parses JSON and runs the service session.
+     */
+    fun onLoopThread() {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+        } catch (e: Throwable) {
+            Log.w(SdkTransport.TAG, "loop_priority_failed ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** Same for the bridge's python-audio-out thread (it only crosses JNI into Player.write). */
+    fun onAudioOutThread() = onLoopThread()
 
     /** pair_selftest: the loopback phone's writes enter here, then take the same path as GATT writes. */
     fun pairSelftestWrite(packet: ByteArray) { t.selfTestListener?.onWrite(packet) }

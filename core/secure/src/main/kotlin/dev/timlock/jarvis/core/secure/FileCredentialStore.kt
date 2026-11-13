@@ -36,9 +36,14 @@ class FileCredentialStore(
             cipher.doFinal(raw, 1 + IV_BYTES, raw.size - 1 - IV_BYTES)
         } catch (t: Throwable) {
             log("secure: cannot read '$name': ${t.javaClass.simpleName}")
-            null
+            // Present but unreadable is NOT "absent": a transient Keystore failure must never look like missing
+            // credentials (it would rotate the node id and orphan the pairing).
+            throw CredentialUnreadableException(name, t)
         }
     }
+
+    /** Presence only (does not decrypt), so an unreadable file still counts as stored. */
+    override fun exists(name: String): Boolean = hasFile(name)
 
     override fun write(name: String, data: ByteArray): Unit = synchronized(lock) {
         requireValidName(name)

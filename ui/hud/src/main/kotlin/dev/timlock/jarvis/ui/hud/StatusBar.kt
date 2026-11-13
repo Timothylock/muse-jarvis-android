@@ -30,6 +30,11 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.SpanStyle
 import dev.timlock.jarvis.core.model.LinkState
 import dev.timlock.jarvis.core.model.Mode
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
+import androidx.compose.ui.platform.LocalContext
 
 fun linkColor(link: LinkState): Color = when (link) {
     is LinkState.Online -> JarvisColors.CyanBright
@@ -83,6 +88,15 @@ fun StatusBar(
         )
         Spacer(Modifier.width(px.dp(24f)))
         if (inCall) Text("CALL " + callClock(callSinceMs), style = base) else Text(time, style = base)
+        // §2.6: battery % only when it is worth a glance (< 30 % or not on power). Display-only.
+        val battery = rememberBatteryInfo()
+        if (battery != null && (battery.percent < BATTERY_LOW_PCT || !battery.charging)) {
+            Spacer(Modifier.width(px.dp(24f)))
+            Text(
+                "BAT ${battery.percent}%",
+                style = if (battery.percent < BATTERY_LOW_PCT) JarvisType.StatusBar.style(JarvisColors.WarnAmber) else base,
+            )
+        }
         if (testInputActive || (testInputEnabled && mode == Mode.REAL)) {
             Spacer(Modifier.width(px.dp(24f)))
             TestInputChip(active = testInputActive)
@@ -111,6 +125,31 @@ fun StatusBar(
             ) { Text("⚙", style = base) }
         }
     }
+}
+
+private const val BATTERY_LOW_PCT = 30
+
+private data class BatteryInfo(val percent: Int, val charging: Boolean)
+
+/** Sticky ACTION_BATTERY_CHANGED, re-read every 60 s while composed (no receiver registration, no wakeups). */
+@Composable
+private fun rememberBatteryInfo(): BatteryInfo? {
+    val ctx = LocalContext.current.applicationContext
+    val info by produceState<BatteryInfo?>(null, ctx) {
+        while (true) {
+            value = readBattery(ctx)
+            delay(60_000)
+        }
+    }
+    return info
+}
+
+private fun readBattery(ctx: Context): BatteryInfo? {
+    val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return null
+    val level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+    val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+    if (level < 0 || scale <= 0) return null
+    return BatteryInfo(level * 100 / scale, i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0)
 }
 
 /** "mm:ss" since [sinceMs]; ticks once a second, and only while composed (i.e. while a call is open). */

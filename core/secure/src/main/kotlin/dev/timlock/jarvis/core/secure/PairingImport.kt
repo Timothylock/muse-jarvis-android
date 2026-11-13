@@ -55,7 +55,13 @@ object PairingImport {
             token = t
         }
 
-        val storedMac = store.read(CredentialNames.IDENTITY)?.let { storedMac(it) }
+        // An unreadable (present but undecryptable) identity is only replaced on an explicit overwrite confirm.
+        val storedMac = try {
+            store.read(CredentialNames.IDENTITY)?.let { storedMac(it) }
+        } catch (e: CredentialUnreadableException) {
+            if (!overwriteIdentity) return Result.Invalid("stored identity unreadable")
+            null
+        }
         if (storedMac != null && storedMac != mac && !overwriteIdentity) {
             return Result.IdentityConflict(nodeIdForMac(storedMac), nodeIdForMac(mac))
         }

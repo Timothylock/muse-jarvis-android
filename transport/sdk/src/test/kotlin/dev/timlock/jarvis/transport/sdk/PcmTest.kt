@@ -17,6 +17,27 @@ class PcmTest {
         assertArrayEquals(shortArrayOf(0x1234), PcmCodec.fromLe(byteArrayOf(0x34, 0x12, 0x7F)))
     }
 
+    @Test fun trimLeadingSilenceKeepsLeadIn() {
+        // 24 kHz: 1 s of silence, then 0.5 s of loud tone.
+        val silence = ShortArray(24_000)
+        val voice = ShortArray(12_000) { (if (it % 2 == 0) 8000 else -8000).toShort() }
+        val out = PcmTrim.trimLeadingSilence(silence + voice)
+        // 200 ms lead-in (4800 samples) + the voiced part.
+        assertEquals(4_800 + 12_000, out.size)
+        assertEquals(0, out[0].toInt())
+        assertEquals(8000, out[4_800].toInt())
+    }
+
+    @Test fun trimLeadingSilenceLeavesUntouchedClipsAlone() {
+        val voiceFirst = ShortArray(24_000) { (if (it % 2 == 0) 8000 else -8000).toShort() }
+        assertEquals(voiceFirst.size, PcmTrim.trimLeadingSilence(voiceFirst).size)
+        val shortLead = ShortArray(2_000) + ShortArray(4_800) { 8000.toShort() }
+        assertEquals(shortLead.size, PcmTrim.trimLeadingSilence(shortLead).size) // < 200 ms of lead-in: nothing cut
+        val allQuiet = ShortArray(48_000)
+        assertEquals(allQuiet.size, PcmTrim.trimLeadingSilence(allQuiet).size)
+        assertEquals(0, PcmTrim.trimLeadingSilence(ShortArray(0)).size)
+    }
+
     @Test fun wavHeader() {
         val wav = Wav.encode(shortArrayOf(1, 2, 3), 24_000)
         assertEquals(44 + 6, wav.size)
