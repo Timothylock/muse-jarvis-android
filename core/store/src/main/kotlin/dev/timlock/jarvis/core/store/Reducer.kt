@@ -560,7 +560,14 @@ private class Ctx(var s: AppState, val now: Long) {
                 revealStartMs = now - PanelManager.BRACKET_STAGE_MS,
             )
         }.take(s.config.maxPanels)
-        val restored = PanelManager.layout(PanelManager.applyLifetimes(PanelStack(keep), callOpen, now, panelTtl))
+        val withLifetimes = PanelManager.applyLifetimes(PanelStack(keep), callOpen, now, panelTtl)
+        // A timer that ended while the process was dead was marked chimed above; give it a fresh
+        // ring window from the restore so it is seen as rung instead of expiring in the same step.
+        val adjusted = withLifetimes.copy(panels = withLifetimes.panels.map {
+            val c = it.content
+            if (c is PanelContent.Timer && c.chimed && c.endsAtMs <= now) it.copy(expiresAtMs = now + PanelManager.TIMER_RING_MS) else it
+        })
+        val restored = PanelManager.layout(adjusted)
         s = s.copy(panels = PanelManager.expire(restored, now).first)
     }
 
