@@ -84,6 +84,24 @@ class CaptionFallbackTest {
         assertEquals(f.t, f.s.caption!!.atMs)
     }
 
+    @Test fun finalFollowedByExtendedPartialContinuesTyping() {
+        val f = F.sim().send(Intent.PttDown).after(10, Intent.CallPhaseChanged(CallPhase.Ready))
+        // A completed STT item (final) ...
+        f.after(0, F.transcript(Role.USER, "set a timer", true))
+        val t0 = f.t
+        assertTrue(f.s.caption!!.final)
+        // ... then the next item's delta extends the accumulated hold text: keep typing, do not restart at char 0.
+        f.after(100, F.transcript(Role.USER, "set a timer for ten", false))
+        assertEquals(t0, f.s.caption!!.atMs) // 6 of 11 chars typed after 100 ms: same start, typing continues
+        assertFalse(f.s.caption!!.final)
+        // Fully typed, long pause, then another extension: continues from the end of the shown text.
+        f.after(3000, F.transcript(Role.USER, "set a timer for ten minutes", true))
+        assertEquals(f.t - 19 * 1000 / 60, f.s.caption!!.atMs)
+        // A Muse caption is a different role: it starts typing from scratch.
+        f.after(10, F.transcript(Role.MUSE, "set a timer for ten minutes", false))
+        assertEquals(f.t, f.s.caption!!.atMs)
+    }
+
     @Test fun captionFadesEightSecondsAfterTheCallGoesIdle() {
         val f = F.sim().send(Intent.PttDown).after(10, Intent.CallPhaseChanged(CallPhase.Ready))
         f.after(100, F.transcript(Role.MUSE, "done", true))

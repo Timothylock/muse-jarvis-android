@@ -1161,6 +1161,11 @@ class CallRunner:
         self.stop_evt = asyncio.Event()
         self._user_done = ""     # completed items of the user's current turn, joined
         self._user_partial = ""  # deltas of the user's in-flight item
+        self._last_user_t = 0.0  # monotonic time of the last user transcript event
+        self._muse_open = False  # a Muse transcript item is in flight (for the muse_starts counter)
+        # Privacy-safe per-call counters (no text), logged once at call end (Fable A2 #4).
+        self.stats = {"user_deltas": 0, "user_completeds": 0, "turn_started": 0, "turn_settled": 0,
+                      "speech_started": 0, "muse_starts": 0, "max_user_len": 0}
 
     # ---- Kotlin-facing (any thread) ----
     def push(self, data):
@@ -1199,44 +1204,73 @@ class CallRunner:
         if self.task is not None:
             await asyncio.wait({self.task}, timeout=13)
 
+    # A user transcript event this long after the previous one starts a new hold (fresh caption).
+    USER_GAP_RESET_S = 3.0
+
     def _tap(self, event):
         kind = event.get("type")
+        st = self.stats
         if kind == "hatch.voice.turn_started":
-            self._user_done = ""
-            self._user_partial = ""
+            # NOT a caption reset: the server endpoints with its own VAD during one continuous hold
+            # and submits each STT item as a turn, so turn_started fires per item. Resetting here
+            # wiped all but the latest fragment (Fable audit A2 #1). Resets happen on a role
+            # switch (first Muse transcript after user text) or a > USER_GAP_RESET_S gap instead.
+            st["turn_started"] += 1
             mid = event.get("submission_message_id")
             if isinstance(mid, str) and mid:
                 HOST.onTurn(self.call_id, True, mid)
         elif kind == "hatch.voice.turn_settled":
+            st["turn_settled"] += 1
             mid = event.get("response_message_id")
             if isinstance(mid, str) and mid:
                 HOST.onTurn(self.call_id, False, mid)
+        elif kind == "input_audio_buffer.speech_started":
+            st["speech_started"] += 1  # counted only: fires per VAD segment, never a caption reset
         else:
             t = _TRANSCRIPTS.get(kind)
             if t is not None:
                 text = event.get(t[2])
                 if isinstance(text, str) and text:
                     if t[0] == "user":
-                        # The service emits the user's speech as per-item fragments (deltas, then a
-                        # completed item). Forwarded raw, the caption bar only ever shows the latest
-                        # few words (Timothy, 2026-11-12). Accumulate across the whole turn instead:
-                        # deltas extend the in-flight item; a completed item folds into the turn text.
-                        if t[1]:
-                            self._user_done = (self._user_done + " " + text.strip()).strip()
-                            self._user_partial = ""
-                            HOST.onTranscript(self.call_id, "user", self._user_done, True)
-                        else:
-                            # Append fragments; if a sender ever switches to cumulative partials
-                            # (each one extending the last), adopt the longer text instead.
-                            if self._user_partial and text.startswith(self._user_partial):
-                                self._user_partial = text
-                            else:
-                                self._user_partial += text
-                            whole = (self._user_done + " " + self._user_partial).strip() \
-                                if self._user_done else self._user_partial
-                            HOST.onTranscript(self.call_id, "user", whole, False)
+                        self._user_event(text, t[1])
                     else:
+                        if not self._muse_open:
+                            st["muse_starts"] += 1
+                        self._muse_open = not t[1]
+                        # Role switch: the user's turn text is complete; the next user event starts fresh.
+                        self._user_done = ""
+                        self._user_partial = ""
                         HOST.onTranscript(self.call_id, t[0], text, t[1])  # text goes to Kotlin only, never logged
+
+    def _user_event(self, text, final):
+        # The service emits the user's speech as per-item fragments (deltas, then a completed item),
+        # possibly several items per hold. Accumulate across the whole hold: deltas extend the
+        # in-flight item; a completed item folds into the turn text. The bridge is the ONLY
+        # accumulation layer (Kotlin shows what it gets).
+        st = self.stats
+        now = time.monotonic()
+        if self._last_user_t and now - self._last_user_t > self.USER_GAP_RESET_S:
+            self._user_done = ""
+            self._user_partial = ""
+        self._last_user_t = now
+        if final:
+            st["user_completeds"] += 1
+            self._user_done = (self._user_done + " " + text.strip()).strip()
+            self._user_partial = ""
+            whole = self._user_done
+        else:
+            st["user_deltas"] += 1
+            # Append fragments; if a sender ever switches to cumulative partials
+            # (each one extending the last), adopt the longer text instead.
+            if self._user_partial and text.startswith(self._user_partial):
+                self._user_partial = text
+            else:
+                self._user_partial += text
+            whole = (self._user_done + " " + self._user_partial).strip() \
+                if self._user_done else self._user_partial
+        if len(whole) > st["max_user_len"]:
+            st["max_user_len"] = len(whole)
+        HOST.onTranscript(self.call_id, "user", whole, final)
 
     async def _watch(self, call):
         announced = False
@@ -1301,6 +1335,8 @@ class CallRunner:
                     conn.cancel()
                     await asyncio.gather(conn, return_exceptions=True)
             self.bridge.calls.pop(self.call_id, None)
+        # Counts only (no transcript text): settles "deltas vs completed-only" and per-item turns.
+        log.info("call stats: %s", " ".join("%s=%d" % kv for kv in sorted(self.stats.items())))
         try:
             HOST.onCallPhase(self.call_id, "ended", reason)
         except Exception:

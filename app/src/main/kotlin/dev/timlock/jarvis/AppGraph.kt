@@ -42,7 +42,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterIsInstance
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -207,6 +210,17 @@ object AppGraph {
                     else -> Unit
                 }
             }
+        }
+        // §5.5 sticky/timer persistence: save on PersistPanels (own collector, so a slow save never delays other
+        // effects; the Mutex in PanelStore serializes writes; the reducer only emits in REAL mode).
+        val panelStore = PanelStore(app)
+        scope.launch {
+            store.effects.filterIsInstance<Effect.PersistPanels>().conflate().collect { panelStore.save(it.stack) }
+        }
+        // Restore once per process, when REAL mode is first seen after BootComplete (never in SIM).
+        scope.launch {
+            store.state.first { it.mode == Mode.REAL && it.machine != dev.timlock.jarvis.core.model.OrbState.BOOT }
+            panelStore.load()?.takeIf { it.panels.isNotEmpty() }?.let { store.dispatch(Intent.RestorePanels(it)) }
         }
         // Call/audio effects: one coroutine, strictly in order.
         scope.launch { store.effects.collect { calls.handle(it) } }
